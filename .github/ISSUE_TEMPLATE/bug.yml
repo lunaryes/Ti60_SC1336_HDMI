@@ -1,0 +1,59 @@
+name: 缺陷报告
+description: 仿真失败、画面异常、综合报错、时序不收敛
+title: "[BUG] "
+labels: ["bug"]
+body:
+  - type: dropdown
+    id: stage
+    attributes:
+      label: 出现阶段
+      options:
+        - L1 模块仿真
+        - L2 算法比对
+        - L3 集成综合
+        - L3 上板
+    validations:
+      required: true
+
+  - type: textarea
+    id: symptom
+    attributes:
+      label: 现象
+      description: 客观描述看到什么（波形、截图、报错原文）
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: 复现步骤
+      description: 命令、输入激励、分支与 commit
+      placeholder: |
+        分支/commit：
+        命令：bash sim/scripts/run_iverilog.sh ...
+        激励：sim/vectors/xxx.hex
+    validations:
+      required: true
+
+  - type: input
+    id: files
+    attributes:
+      label: 相关文件
+      placeholder: src/image/sobel_edge.v
+    validations:
+      required: false
+
+  - type: textarea
+    id: tried
+    attributes:
+      label: 已尝试的排查
+      description: 排除过哪些可能，避免重复劳动
+    validations:
+      required: false

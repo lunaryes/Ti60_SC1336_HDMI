@@ -1,0 +1,42 @@
+# ============================================================
+#  文件归属（CODEOWNERS）
+#  ⚠️ @ 后面的名字是占位符，请替换成真实的 GitHub 用户名 / 团队名。
+#  放置位置：.github/CODEOWNERS（GitHub 会自动识别）
+# ============================================================
+
+# ---------- 顶层与工程文件：仅集成负责人 ----------
+/Ti60F225_SC1336_HDMI_Display/example_top.v           @integrator
+/Ti60F225_SC1336_HDMI_Display/Ti60_Demo.xml           @integrator
+/Ti60F225_SC1336_HDMI_Display/Ti60_Demo.peri.xml      @integrator
+/Ti60F225_SC1336_HDMI_Display/Ti60_Demo.pt.sdc        @integrator
+/Ti60F225_SC1336_HDMI_Display/start.cmd               @integrator
+
+# ---------- 流水线顶层与延迟对齐：集成负责人 ----------
+/Ti60F225_SC1336_HDMI_Display/src/image/image_pipeline_top.v   @integrator
+/Ti60F225_SC1336_HDMI_Display/src/common/sync_delay_align.v    @integrator
+
+# ---------- 算法模块 ----------
+/Ti60F225_SC1336_HDMI_Display/src/image/              @algo-team
+
+# ---------- 显示合成 ----------
+/Ti60F225_SC1336_HDMI_Display/src/display/            @display-team
+
+# ---------- 通用模块 ----------
+/Ti60F225_SC1336_HDMI_Display/src/common/             @display-team
+
+# ---------- 既有基线：只读区（改动需 2 人 approve）----------
+/Ti60F225_SC1336_HDMI_Display/src/isp/                @integrator @algo-team
+/Ti60F225_SC1336_HDMI_Display/src/axi/                @integrator
+/Ti60F225_SC1336_HDMI_Display/src/hdmi_ip/            @display-team
+/Ti60F225_SC1336_HDMI_Display/src/lvds/               @display-team
+/Ti60F225_SC1336_HDMI_Display/src/dsi/                @display-team
+/Ti60F225_SC1336_HDMI_Display/src/cmos_i2c/           @camera-owner
+/Ti60F225_SC1336_HDMI_Display/ip/                     @integrator
+
+# ---------- 仿真与工具 ----------
+/sim/                                                 @verify-team
+/tools/                                               @verify-team
+
+# ---------- 文档与流程 ----------
+/docs/                                                @all
+/README.md /CONTRIBUTING.md /.gitignore               @integrator

@@ -1,0 +1,92 @@
+# ============================================================
+#  赛题四 · FPGA 实时图像边缘检测
+#  仓库根：07-1_Ti60_SC1336_HDMI_1280720
+#
+#  原则：只提交「手写源码 + 工程定义 + 生成后无法重建的配置」
+#        绝不提交 Efinity / Questa 的构建产物（本工程 113 MB 中 98% 是产物）
+#
+#  ⚠️ 执行顺序：先落本文件，再 git add。
+#     否则 work_pnr 的 28 MB / outflow 的 43 MB 会被写进 git 历史，事后清理很痛苦。
+# ============================================================
+
+# ---------- Efinity 构建工作区（约 72 MB，可完全重建）----------
+work_syn/
+work_pnr/
+work_pt/
+work_dbg/
+ooc/
+outflow/
+
+# ---------- Efinity / Questa 中间文件 ----------
+*.qdb
+*.qpg
+*.qtl
+*.qlib
+*.qchip
+*.qnet
+*.qdelay
+*.qsdc
+*.vdb
+*.lbf
+*.pickle
+*.netlist
+*.place
+*.route
+*.troutingtraces
+*.wlf
+*.cr.mti
+*.mpf
+*.vo
+*.sdo
+*.xrf
+*.sft
+*.vmake
+*.bit
+*.bitbin
+*.hexbin
+
+# ⚠️ 严禁在这里写 *.hex
+#    位流导出是 outflow/*.hex（已被整目录忽略），
+#    但后续 sim/vectors/ 里的测试图样也是 .hex，用通配会误伤激励文件。
+
+# ---------- 仿真器产物 ----------
+sim/work/
+sim/out/
+sim/transcript
+sim/vsim.wlf
+sim/modelsim.ini
+
+# ---------- IP 的可丢弃部分 ----------
+# ---------- IP 的可丢弃部分（必须带 **/ 前缀）----------
+# 本工程的 IP 在 Ti60F225_SC1336_HDMI_Display/ip/ 下，不在仓库根的 ip/ 下。
+# gitignore 中「中间带斜杠」的模式会被锚定到本文件所在目录，
+# 所以写 ip/*/Testbench/ 会静默失效——必须写成 **/ip/*/xxx。
+#
+# 必须保留：settings.json、<ip>.sv 本体、<ip>_define.svh、<ip>_bb.v、DdrCtrl/ddr3_controller.bin
+# 可丢弃：IP Manager 内部 pickle、生成的仿真环境、官方 devkit 示例工程（含 Ti180/T20 等非本板卡变体）
+**/ip/*/ipm/
+**/ip/*/Testbench/
+**/ip/*/*_devkit/
+
+# ---------- 手工备份与压缩包 ----------
+*.bak
+*.orig
+*.rej
+*.zip
+*.rar
+*.7z
+
+# ---------- 调试日志与波形 ----------
+efinity_dbg.jtag.log*
+debug_profile.wizard.json
+*.vcd
+*.gtkw
+
+# ---------- 编辑器 / IDE ----------
+.vscode/
+.idea/
+
+# ---------- 系统文件 ----------
+Thumbs.db
+.DS_Store
+desktop.ini

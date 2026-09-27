@@ -1,0 +1,62 @@
+{
+    "args": [
+        "-o",
+        "dsi_tx",
+        "--base_path",
+        "ip",
+        "--vlnv",
+        {
+            "vendor": "efinixinc.com",
+            "library": "mipi",
+            "name": "efx_dsi_tx",
+            "version": "5.15"
+        }
+    ],
+    "conf": {
+        "tLPX_NS": "60",
+        "tINIT_NS": "1000",
+        "NUM_DATA_LANE": "4",
+        "HS_BYTECLK_MHZ": "50",
+        "CLOCK_FREQ_MHZ": "50",
+        "DPHY_CLOCK_MODE": "\"Continuous\"",
+        "PIXEL_FIFO_DEPTH": "4096",
+        "tLP_EXIT_NS": "100",
+        "tCLK_ZERO_NS": "280",
+        "tCLK_TRAIL_NS": "100",
+        "tCLK_PRE_NS": "10",
+        "tCLK_POST_NS": "100",
+        "tCLK_PREPARE_NS": "50",
+        "tWAKEUP_NS": "1000",
+        "tHS_ZERO_NS": "200",
+        "tHS_TRAIL_NS": "65",
+        "tHS_EXIT_NS": "120",
+        "Pack_48": "1'b1",
+        "Pack_64": "1'b0",
+        "tHS_PREPARE_NS": "50",
+        "BTA_TIMEOUT_NS": "1000",
+        "tD_TERM_EN_NS": "35",
+        "tHS_PREPARE_ZERO_NS": "145",
+        "ENABLE_V_LPM_BTA": "1'b0",
+        "PACKET_SEQUENCES": "1",
+        "HS_CMD_WDATAFIFO_DEPTH": "512",
+        "LP_CMD_WDATAFIFO_DEPTH": "512",
+        "LP_CMD_RDATAFIFO_DEPTH": "512",
+        "MAX_HRES": "1024",
+        "ENABLE_BIDIR": "1'b1",
+        "ENABLE_EOTP": "1'b0",
+        "Pack_60": "1'b0",
+        "Pack_36": "1'b0",
+        "MIPI_DSI_TX_DEBUG": "1'b0"
+    },
+    "output": {
+        "external_source_source": [],
+        "external_testbench_modelsim": [],
+        "external_testbench_testbench": [],
+        "external_example_example": [],
+        "external_testbench_ncsim": [],
+        "external_testbench_synopsys": []
+    },
+    "ooc_synthesis": {},
+    "sw_version": "2026.1.132",
+    "external_path_option": "RELATIVE_PATH"
+}

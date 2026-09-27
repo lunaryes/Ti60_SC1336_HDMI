@@ -1,0 +1,27 @@
+# 换行与文本属性
+#
+# 仓库内一律存 LF；检出时是否转 CRLF 由各人的 core.autocrlf 决定。
+# 这样同一个文件在不同机器上不会因为换行符产生无意义的 diff。
+
+* text=auto
+
+# Shell 脚本必须 LF，否则在 Git Bash / WSL / CI 里会报
+#   /usr/bin/env: 'bash\r': No such file or directory
+*.sh   text eol=lf
+
+# Windows 批处理必须是 CRLF
+*.cmd  text eol=crlf
+*.bat  text eol=crlf
+
+# 二进制，不要做任何换行转换
+*.bit  binary
+*.hex  binary
+*.bin  binary
+*.png  binary
+*.jpg  binary
+*.pdf  binary
+*.qdb  binary
+*.qpg  binary
+*.vdb  binary
+*.lbf  binary
+*.wlf  binary

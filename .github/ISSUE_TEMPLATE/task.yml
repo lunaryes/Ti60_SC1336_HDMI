@@ -1,0 +1,76 @@
+name: 开发任务
+description: 新建一个可独立认领、独立验证的开发任务
+title: "[U?] "
+labels: ["task"]
+body:
+  - type: dropdown
+    id: unit
+    attributes:
+      label: 交付单元
+      description: 对应《模块划分与文件归属》§5 的交付单元
+      options:
+        - U1 3x3 像素窗口发生器
+        - U2 Sobel 边缘检测
+        - U3 流水线顶层与系统集成
+        - U4 显示合成
+        - U5 可选扩展（中值 / 按键 / 图样 / Canny / 目标识别）
+        - V1 验证与工具
+        - infra 基础设施
+    validations:
+      required: true
+
+  - type: textarea
+    id: goal
+    attributes:
+      label: 目标
+      description: 一句话说明要达成什么，以及为什么需要它
+    validations:
+      required: true
+
+  - type: textarea
+    id: deliverables
+    attributes:
+      label: 交付物
+      description: 具体到文件路径
+      placeholder: |
+        - src/image/pix_window_3x3.v
+        - sim/tb/tb_pix_window_3x3.v
+    validations:
+      required: true
+
+  - type: textarea
+    id: interface
+    attributes:
+      label: 接口
+      description: 端口签名与 LATENCY。已冻结的接口请直接引用 docs/INTERFACE.md，不要重定义
+      render: verilog
+    validations:
+      required: true
+
+  - type: textarea
+    id: dod
+    attributes:
+      label: 验收标准 (DoD)
+      description: 可被他人复现的、客观的判据
+      placeholder: |
+        - [ ] iverilog 仿真通过，TB 断言 LATENCY 正确
+        - [ ] 与 Python 参考模型逐像素比对 0 差异
+        - [ ] 边界行/列行为符合文档描述
+    validations:
+      required: true
+
+  - type: textarea
+    id: files
+    attributes:
+      label: 涉及文件
+      description: 新建 / 修改 / 只读参考，分别列出
+    validations:
+      required: true
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: 提示与坑
+      description: 已知的陷阱、可复用的基线代码、性能要求
+    validations:
+      required: false
