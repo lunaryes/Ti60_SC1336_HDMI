@@ -53,7 +53,7 @@ rgb_i[23:0] ──► pix_window_3x3 ──┬──► sobel_edge ──► mag
 
 ## 3. 时钟域
 
-全部在 `clk_pixel`（74.4 MHz）单域。详见 `INTERFACE.md` 末节。
+全部在 `clk_pixel`（74.4 MHz）单域。详见 `INTERFACE.md` §2。
 
 ## 4. 资源预算（初步）
 
