@@ -90,3 +90,5 @@ debug_profile.wizard.json
 Thumbs.db
 .DS_Store
 desktop.ini
+
+.lock
