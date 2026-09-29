@@ -1105,6 +1105,28 @@ assign w_rgb_r = w_rgb_r_mult[17:16] ? 8'hFF : w_rgb_r_mult[15: 8];
 assign w_rgb_g = w_rgb_pre_g; 
 assign w_rgb_b = w_rgb_b_mult[17:16] ? 8'hFF : w_rgb_b_mult[15: 8]; 
 
+// =========================================================================================================================================
+// RGB to gray
+// =========================================================================================================================================
+wire                                    gray_vs                    ;
+wire                                    gray_hs                    ;
+wire                                    gray_de                    ;
+wire                   [  23:0]         gray_rgb                   ;
+
+rgb_to_gray u_rgb_to_gray (
+    .clk                               (clk_pixel                 ),
+    .rst_n                             (rstn_pixel                ),
+
+    .vs_i                              (w_rgb_vsync               ),
+    .hs_i                              (w_rgb_hsync               ),
+    .de_i                              (w_rgb_href                ),
+    .rgb_i                             ({w_rgb_r, w_rgb_g, w_rgb_b}),
+
+    .vs_o                              (gray_vs                   ),
+    .hs_o                              (gray_hs                   ),
+    .de_o                              (gray_de                   ),
+    .rgb_o                             (gray_rgb                  )
+);
 
 wire                                    boundcrop_vs               ;
 wire                                    boundcrop_hs               ;
@@ -1114,10 +1136,10 @@ FrameBoundCrop #(.SKIP_ROWS(2),.SKIP_COLS(2),.TOTAL_ROWS(720),.TOTAL_COLS(1280))
     .clk_i                             (clk_pixel                 ),
     .rst_i                             (~rstn_pixel               ),
 	
-    .vs_i                              (w_rgb_vsync               ),
-    .hs_i                              (w_rgb_hsync               ),
-    .de_i                              (w_rgb_href                ),
-    .data_i                            ({w_rgb_r, w_rgb_g, w_rgb_b}),
+    .vs_i                              (gray_vs                   ),
+    .hs_i                              (gray_hs                   ),
+    .de_i                              (gray_de                   ),
+    .data_i                            (gray_rgb                  ),
 	
     .vs_o                              (boundcrop_vs              ),
     .hs_o                              (boundcrop_hs              ),
