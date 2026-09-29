@@ -35,6 +35,7 @@
         <efx:design_file name="src/isp/VIP_RAW8_RGB888.v" version="default" library="default"/>
         <efx:design_file name="src/isp/FrameBoundCrop.v" version="default" library="default"/>
         <efx:design_file name="src/isp/Line_Shift_RAM_8Bit.v" version="default" library="default"/>
+        <efx:design_file name="src/image/rgb_to_gray.v" version="default" library="default"/>
         <efx:top_vhdl_arch name=""/>
         <efx:msg_config name=""/>
         <efx:partition_definitions name=""/>
