@@ -1128,6 +1128,55 @@ rgb_to_gray u_rgb_to_gray (
     .rgb_o                             (gray_rgb                  )
 );
 
+// =========================================================================================================================================
+// image mix : 原图 + 边缘图合成
+// orig 与 edge 必须逐像素同拍；rgb_to_gray（当前兼任边缘图占位，延迟 1 拍）所以原图
+// 路径补 1 拍对齐。等 sobel_edge 接入后由 src/common 的延迟对齐模块统一处理。
+// mode_i 默认接 3（画中画）；mode 3 尚未实现，当前等同 mode 2 分屏。
+// =========================================================================================================================================
+wire                                    mix_vs                     ;
+wire                                    mix_de                     ;
+wire                   [  23:0]         mix_rgb                    ;
+
+reg                                     orig_vs_d1                 ;
+reg                                     orig_de_d1                 ;
+reg                    [  23:0]         orig_rgb_d1                ;
+reg                                     gray_hs_d1                 ;
+
+always @(posedge clk_pixel or negedge rstn_pixel) begin
+    if(!rstn_pixel) begin
+        orig_vs_d1  <= 1'b0;
+        orig_de_d1  <= 1'b0;
+        orig_rgb_d1 <= 24'h000000;
+    end else begin
+        orig_vs_d1  <= w_rgb_vsync;
+        orig_de_d1  <= w_rgb_href;
+        orig_rgb_d1 <= {w_rgb_r, w_rgb_g, w_rgb_b};
+    end
+end
+
+always @(posedge clk_pixel or negedge rstn_pixel) begin
+    if(!rstn_pixel)
+        gray_hs_d1 <= 1'b0;
+    else
+        gray_hs_d1 <= gray_hs;
+end
+
+image_mix #(.IMG_W(1280), .IMG_H(720)) u_image_mix (
+    .clk_i                             (clk_pixel                 ),
+    .rst_ni                            (rstn_pixel                ),
+
+    .vsync_i                           (orig_vs_d1                ),
+    .de_i                              (orig_de_d1                ),
+    .orig_rgb_i                        (orig_rgb_d1               ),
+    .edge_rgb_i                        (gray_rgb                  ),
+    .mode_i                            (2'd3                      ),
+
+    .vsync_o                           (mix_vs                    ),
+    .de_o                              (mix_de                    ),
+    .rgb_o                             (mix_rgb                   )
+);
+
 wire                                    boundcrop_vs               ;
 wire                                    boundcrop_hs               ;
 wire                                    boundcrop_de               ;
@@ -1136,10 +1185,10 @@ FrameBoundCrop #(.SKIP_ROWS(2),.SKIP_COLS(2),.TOTAL_ROWS(720),.TOTAL_COLS(1280))
     .clk_i                             (clk_pixel                 ),
     .rst_i                             (~rstn_pixel               ),
 	
-    .vs_i                              (gray_vs                   ),
-    .hs_i                              (gray_hs                   ),
-    .de_i                              (gray_de                   ),
-    .data_i                            (gray_rgb                  ),
+    .vs_i                              (mix_vs                    ),
+    .hs_i                              (gray_hs_d1                ),
+    .de_i                              (mix_de                    ),
+    .data_i                            (mix_rgb                   ),
 	
     .vs_o                              (boundcrop_vs              ),
     .hs_o                              (boundcrop_hs              ),
