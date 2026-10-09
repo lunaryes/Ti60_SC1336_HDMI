@@ -1128,6 +1128,49 @@ rgb_to_gray u_rgb_to_gray (
     .rgb_o                             (gray_rgb                  )
 );
 
+// =========================================================================================================================================
+// 实时边缘检测流水线
+// 插入点：AWB -> rgb_to_gray 之后、FrameBoundCrop 之前（全工程唯一插入点）
+// 内部结构：pix_window_3x3 -> sobel_edge -> image_mix，旁路经 sync_delay_align 对齐
+// =========================================================================================================================================
+wire                                    edge_vs                    ;
+wire                                    edge_de                    ;
+wire                   [  23:0]         edge_rgb                   ;
+wire                                    pipe_hs                    ;
+wire                   [   7:0]         edge_thr                   ;
+wire                   [   1:0]         edge_mode                  ;
+
+assign edge_thr  = 8'd40;   // Sobel 阈值，复位默认 40
+assign edge_mode = 2'd1;    // 0=原图  1=边缘图  2=左原右边缘  3=画中画(待实现)
+
+// hsync 必须延迟与流水线相同的 7 拍，否则 HS 与 DE 失去同步、图像会被横移 7 个像素
+sync_delay_align #(.DEPTH(7), .DW(1)) u_pipe_hs_align (
+    .clk                               (clk_pixel                 ),
+    .rst_n                             (rstn_pixel                ),
+    .vsync_i                           (gray_de                   ),
+    .de_i                              (gray_de                   ),
+    .data_i                            (gray_hs                   ),
+    .vsync_o                           (                          ),
+    .de_o                              (                          ),
+    .data_o                            (pipe_hs                   )
+);
+
+image_pipeline_top #(
+    .IMG_W                             (1280                      ),
+    .IMG_H                             (720                       )
+) u_image_pipeline_top (
+    .clk_i                             (clk_pixel                 ),
+    .rst_ni                            (rstn_pixel                ),
+    .vsync_i                           (gray_vs                   ),
+    .de_i                              (gray_de                   ),
+    .rgb_i                             (gray_rgb                  ),
+    .thr_i                             (edge_thr                  ),
+    .mode_i                            (edge_mode                 ),
+    .vsync_o                           (edge_vs                   ),
+    .de_o                              (edge_de                   ),
+    .rgb_o                             (edge_rgb                  )
+);
+
 wire                                    boundcrop_vs               ;
 wire                                    boundcrop_hs               ;
 wire                                    boundcrop_de               ;
@@ -1136,10 +1179,10 @@ FrameBoundCrop #(.SKIP_ROWS(2),.SKIP_COLS(2),.TOTAL_ROWS(720),.TOTAL_COLS(1280))
     .clk_i                             (clk_pixel                 ),
     .rst_i                             (~rstn_pixel               ),
 	
-    .vs_i                              (gray_vs                   ),
-    .hs_i                              (gray_hs                   ),
-    .de_i                              (gray_de                   ),
-    .data_i                            (gray_rgb                  ),
+    .vs_i                              (edge_vs                   ),
+    .hs_i                              (pipe_hs                   ),
+    .de_i                              (edge_de                   ),
+    .data_i                            (edge_rgb                  ),
 	
     .vs_o                              (boundcrop_vs              ),
     .hs_o                              (boundcrop_hs              ),
