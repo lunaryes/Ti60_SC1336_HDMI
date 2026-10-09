@@ -50,6 +50,10 @@ outflow/
 #    但后续 sim/vectors/ 里的测试图样也是 .hex，用通配会误伤激励文件。
 
 # ---------- 仿真器产物 ----------
+# Icarus Verilog 编译产物（sim/run.sh 生成）
+sim/*.vvp
+sim/*.vcd
+
 sim/work/
 sim/out/
 sim/transcript
