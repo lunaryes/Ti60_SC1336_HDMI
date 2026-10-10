@@ -1,93 +1,102 @@
 # ============================================================
 #  文件归属（CODEOWNERS）
 # ------------------------------------------------------------
-#  改这个文件前，先读这三条：
+#  【本文件的唯一规则】只按 git 提交历史的**实际作者**指定 owner，
+#  不做角色猜测。判定命令（对任一 <path> 执行）：
 #
-#  1. 本仓库属「个人账号」（owner.type = User），不是组织。
-#     因此 CODEOWNERS **不能**引用 @org/team 形式，只能用个人账号。
-#     目前可用的账号只有两个：@lunaryes（仓库所有者）、@yqiiu。
+#      git log --all --format='%an' -- <path> | sort -u
 #
-#     原先的 @integrator / @algo-team / @display-team / @verify-team /
-#     @camera-owner 都是**不存在的占位符**。GitHub 遇到无法解析的 owner 会
-#     提示 "Unknown owner"，并且该条规则**完全不生效**（等于没写）。
+#  三种结果对应三种写法：
 #
-#  2. 下面的「角色 → 账号」是按 git 提交历史推断的，不是本人确认的。
-#     带 `← 推断` 的行请对应角色本人核对：是你就无需改动，指向别人就替换账号。
+#    · 只有一方提交过   → 写该方
+#    · 双方都提交过     → 双方都写（GitHub 会同时请求两人 review）
+#    · 只有基线作者提交过 / 无法确证 → 【不写 owner】
 #
-#  3. CODEOWNERS **只在 PR 的 base 分支上生效**。官方原文：
-#     "For code owners to receive review requests, the CODEOWNERS file must be
-#      on the base branch of the pull request."
-#     本文件当前位于特性分支，规则要等合入 main 之后才开始起作用。
+#  为什么「不确证就不写」：GitHub 对无法解析的 owner 会判 Unknown owner，
+#  并且**整条规则静默失效**——写了等于没写，还给人「已设好 reviewer」的错觉。
+#  官方明确支持「模式后面不写 owner」，语义是**任何具备 write 权限的人都可以批准**。
+#  这比硬塞一个猜出来的账号诚实得多。
 #
-#  4. 改完怎么自检：GitHub 会在文件页面高亮语法错误；也可用 API 列出错误：
-#     GET /repos/{owner}/{repo}/codeowners/errors
-#     ⚠️ 该接口校验的是**默认分支**的 CODEOWNERS，在特性分支上改本文件时
-#        无法用它验证，只能靠官方语法规则人工核对。
-#     另注：owner 必须有该仓库的显式 write 权限，否则「不会被分配」而不是报错，
-#     这类问题只会在开 PR 时表现为「没人被请求 review」，很容易被忽略。
+#  【账号可用性】（已用 API 核实，`GET /users/<name>` 均 HTTP 200）
+#    @lunaryes  仓库所有者
+#    @yqiiu     协作者
+#    本仓库属**个人账号**（`owner.type = User`），**不能**使用 `@org/team` 形式。
+#    原文件里的 @integrator / @algo-team / @display-team / @verify-team /
+#    @camera-owner 全是不存在的占位符，已全部移除。
+#    另：`@all` 也不是合法 token（合法形式只有 @username、@org/team-name、邮箱）。
+#
+#  【生效范围 —— 容易踩的坑】
+#    1. CODEOWNERS **只在 PR 的 base 分支上生效**。官方原文：
+#       "For code owners to receive review requests, the CODEOWNERS file
+#        must be on the base branch of the pull request."
+#       本文件当前位于特性分支，规则要等合入 main 之后才开始起作用。
+#    2. owner 还必须有本仓库的**显式 write 权限**，否则不会报错，
+#       只表现为「开 PR 时没人被请求 review」，极易被忽略。
+#    3. 自检接口 `GET /repos/{owner}/{repo}/codeowners/errors` 只校验**默认分支**，
+#       在特性分支上改本文件时用不了，只能按官方语法人工核对。
 #
 #  语义：某路径被 PR 改动时，会自动请求对应的 owner 做 review。
-#  （是否「必须 approve 才能合并」由分支保护规则决定，与本文件无关。）
+#       （是否「必须 approve 才能合并」由分支保护规则决定，与本文件无关）
+#
+#  本组规则生成于 2026-10-10，依据当时的全部 refs（含 owner 的 feature 分支）。
 # ============================================================
 
 
-# ---------- 顶层与工程文件：集成负责人独占 ----------
-/Ti60F225_SC1336_HDMI_Display/example_top.v           @lunaryes   # ← 推断
-/Ti60F225_SC1336_HDMI_Display/Ti60_Demo.xml           @lunaryes   # ← 推断
-/Ti60F225_SC1336_HDMI_Display/Ti60_Demo.peri.xml      @lunaryes   # ← 推断
-/Ti60F225_SC1336_HDMI_Display/Ti60_Demo.pt.sdc        @lunaryes   # ← 推断
-/Ti60F225_SC1336_HDMI_Display/start.cmd               @lunaryes   # ← 推断
+# ------------------------------------------------------------
+#  ① 只有 @yqiiu 提交过
+# ------------------------------------------------------------
+/Ti60F225_SC1336_HDMI_Display/src/common/              @yqiiu
+/sim/                                                  @yqiiu
+/tools/                                                @yqiiu
+/CONTRIBUTING.md                                       @yqiiu
+/rfc/                                                  @yqiiu
 
-# ---------- 流水线顶层与延迟对齐：集成负责人 ----------
-/Ti60F225_SC1336_HDMI_Display/src/image/image_pipeline_top.v   @lunaryes   # ← 推断
-/Ti60F225_SC1336_HDMI_Display/src/common/sync_delay_align.v    @lunaryes   # ← 推断
 
-# ---------- 算法模块 ----------
-/Ti60F225_SC1336_HDMI_Display/src/image/              @yqiiu   # ← 推断（pix_window_3x3 / sobel_edge 由其提交）
+# ------------------------------------------------------------
+#  ② 双方都提交过 → 共同持有（任一方的改动都请另一方 review）
+# ------------------------------------------------------------
+/Ti60F225_SC1336_HDMI_Display/example_top.v            @lunaryes @yqiiu
+/Ti60F225_SC1336_HDMI_Display/Ti60_Demo.xml            @lunaryes @yqiiu
+/Ti60F225_SC1336_HDMI_Display/start.cmd                @lunaryes @yqiiu
 
-# ---------- 显示合成 ----------
-# 该目录下双方各有一份实现（image_mix.v 与 edge_display_mix.v），
-# 故设为共同持有：任一方的改动都请另一方 review。
-# 参见 rfc/0002-display-module-naming.md
-/Ti60F225_SC1336_HDMI_Display/src/display/            @lunaryes @yqiiu
+# src/image/：rgb_to_gray.v 是基线（他），3x3 窗口 / Sobel / 流水线顶层 / 行缓存副本是我们
+/Ti60F225_SC1336_HDMI_Display/src/image/               @lunaryes @yqiiu
 
-# ---------- 通用模块 ----------
-/Ti60F225_SC1336_HDMI_Display/src/common/             @lunaryes @yqiiu
+# src/display/：目前只有我们的 edge_display_mix.v；对方的 image_mix.v 也落在这一目录，
+# 故设为共同持有。参见 rfc/0002-display-module-naming.md
+/Ti60F225_SC1336_HDMI_Display/src/display/             @lunaryes @yqiiu
 
-# ---------- 既有基线：只读区（改动需 2 人 approve）----------
-/Ti60F225_SC1336_HDMI_Display/src/isp/                @lunaryes @yqiiu
-/Ti60F225_SC1336_HDMI_Display/src/axi/                @lunaryes   # ← 推断
-/Ti60F225_SC1336_HDMI_Display/src/hdmi_ip/            @lunaryes   # ← 推断
-/Ti60F225_SC1336_HDMI_Display/src/lvds/               @lunaryes   # ← 推断
-/Ti60F225_SC1336_HDMI_Display/src/dsi/                @lunaryes   # ← 推断
-/Ti60F225_SC1336_HDMI_Display/src/cmos_i2c/           @lunaryes   # ← 推断
-/Ti60F225_SC1336_HDMI_Display/ip/                     @lunaryes   # ← 推断
+/.github/                                              @lunaryes @yqiiu
+/README.md                                             @lunaryes @yqiiu
+/.gitignore                                            @lunaryes @yqiiu
 
-# ---------- 仿真与工具 ----------
-/sim/                                                 @yqiiu   # ← 推断
-/tools/                                               @yqiiu   # ← 推断
 
-# ---------- 流程与仓库元文件 ----------
-/README.md                                            @lunaryes   # ← 推断
-/CONTRIBUTING.md                                      @lunaryes   # ← 推断
-/.gitignore                                           @lunaryes   # ← 推断
-# /.github/ 同时覆盖本文件自身（.github/CODEOWNERS）。
-# 官方建议明确给 CODEOWNERS 自身定 owner，否则归属规则可被任意改动者顺手改掉。
-/.github/                                             @lunaryes   # ← 推断
-/rfc/                                                 @lunaryes @yqiiu
+# ------------------------------------------------------------
+#  ③ 只有基线作者提交过 / 无法确证 → 不指定 owner
+#     下面这些路径的「唯一作者是基线作者」这件事，**不足以**证明他要长期
+#     review 它们——写了基线不等于认领了维护责任。故按官方语法留空，
+#     语义为「任何有 write 权限的人都可以批准」。
+#     若某位负责人确认要认领，直接在行尾补 @账号 即可。
+# ------------------------------------------------------------
+/Ti60F225_SC1336_HDMI_Display/Ti60_Demo.peri.xml
+/Ti60F225_SC1336_HDMI_Display/Ti60_Demo.pt.sdc
+/Ti60F225_SC1336_HDMI_Display/src/axi/
+/Ti60F225_SC1336_HDMI_Display/src/isp/
+/Ti60F225_SC1336_HDMI_Display/src/lvds/
+/Ti60F225_SC1336_HDMI_Display/src/dsi/
+/Ti60F225_SC1336_HDMI_Display/src/hdmi_ip/
+/Ti60F225_SC1336_HDMI_Display/src/cmos_i2c/
+/Ti60F225_SC1336_HDMI_Display/ip/
+/.gitattributes
 
-# ---------- 文档：不设强制 owner ----------
-# 原文写的是 `/docs/  @all`。**@all 不是 GitHub CODEOWNERS 的合法 token**
-# （官方只认 @username、@org/team-name、邮箱三种形式），写了会被判为
-# Unknown owner 并整行跳过。这里按原意处理 —— 官方文档明确支持
-# 「模式后面不写 owner」，语义是该路径任何具备 write 权限的人都可以批准，
-# 正是原作者想要的 @all 效果：
+# docs/：原作者写的是 `/docs/  @all`，而 @all 不是合法 token。
+# 其意图是「人人可批准」，与「不写 owner」语义一致，故保留原意，不因作者历史收紧。
 /docs/
 
-# 若确实需要固定 reviewer，取消下行注释、并删掉上面的 /docs/：
-# /docs/                                              @lunaryes
 
-# ---------- 兜底（默认关闭）----------
-# 若希望「未在上面列出的任何路径」都默认需要集成负责人 review，
-# 取消下面这行的注释。注意：这会显著增加 PR 的 review 负担，请团队确认后再开。
-# *                                                   @lunaryes
+# ------------------------------------------------------------
+#  兜底（默认关闭）
+# ------------------------------------------------------------
+# 若希望「未在上面列出的任何路径」都默认需要 review，取消下面这行的注释。
+# 注意：这会显著增加 PR 的 review 负担，请团队确认后再开。
+# *                                                    @lunaryes
