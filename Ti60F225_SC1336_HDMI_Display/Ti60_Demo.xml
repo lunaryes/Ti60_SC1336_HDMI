@@ -40,7 +40,7 @@
         <efx:design_file name="src/image/sobel_edge.v" version="default" library="default"/>
         <efx:design_file name="src/image/image_pipeline_top.v" version="default" library="default"/>
         <efx:design_file name="src/common/sync_delay_align.v" version="default" library="default"/>
-        <efx:design_file name="src/display/image_mix.v" version="default" library="default"/>
+        <efx:design_file name="src/display/edge_display_mix.v" version="default" library="default"/>
         <efx:top_vhdl_arch name=""/>
         <efx:msg_config name=""/>
         <efx:partition_definitions name=""/>

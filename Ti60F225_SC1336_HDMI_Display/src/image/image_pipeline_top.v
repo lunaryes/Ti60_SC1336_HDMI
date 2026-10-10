@@ -8,17 +8,17 @@
 //                               │                        │
 //                               └── sync_delay_align ────┤（旁路对齐）
 //                                                        ▼
-//                                                   image_mix ──► rgb_o
+//                                           edge_display_mix ──► rgb_o
 //
 // 【旁路对齐（关键）】
 //   旁路路径不是简单地把 rgb_i 直接接到 MUX：
 //     - 原图取 pix_window_3x3 输出的中心像素 p22（第 n-1 行、第 x-2 列），
 //       与 Sobel 的窗口中心天然同源同拍，省掉一整块行缓存；
 //     - 再用 sync_delay_align 补上 sobel_edge 的 4 级流水延迟。
-//   这样进 image_mix 的 orig_rgb_i 与 edge_rgb_i 严格同拍，mode=0 不会错位。
+//   这样进 edge_display_mix 的 orig_rgb_i 与 edge_rgb_i 严格同拍，mode=0 不会错位。
 //
 // 【对外延迟】
-//   数据与握手信号同延迟：2 拍（pix_window_3x3）+ 4 拍（sobel_edge）+ 1 拍（image_mix）
+//   数据与握手信号同延迟：2 拍（pix_window_3x3）+ 4 拍（sobel_edge）+ 1 拍（edge_display_mix）
 //   = 7 拍，外加垂直 1 行。
 //   即 vsync_o / de_o 相对 vsync_i / de_i 延迟 LATENCY = 7 拍。
 //   example_top 必须把 hsync 也延迟 7 拍，否则 HS 与 DE 不再同步、图像会横移
@@ -39,7 +39,7 @@ module image_pipeline_top #(
     input  wire        de_i,
     input  wire [23:0] rgb_i,
     input  wire [7:0]  thr_i,        // 默认 40
-    input  wire [1:0]  mode_i,       // 含义见 image_mix
+    input  wire [1:0]  mode_i,       // 含义见 edge_display_mix
     output wire        vsync_o,
     output wire        de_o,
     output wire [23:0] rgb_o
@@ -124,10 +124,10 @@ module image_pipeline_top #(
     //-----------------------------------------------------------------
     // 合成输出
     //-----------------------------------------------------------------
-    image_mix #(
+    edge_display_mix #(
         .IMG_W (IMG_W),
         .IMG_H (IMG_H)
-    ) u_image_mix (
+    ) u_edge_display_mix (
         .clk_i      (clk_i),
         .rst_ni     (rst_ni),
         .vsync_i    (orig_vs),

@@ -1,6 +1,6 @@
 `timescale 1ns / 1ps
 //=====================================================================
-// image_mix  —— 接口 I-C
+// edge_display_mix  —— 接口 I-C
 //---------------------------------------------------------------------
 // 把原图与边缘图合成为一路 RGB888。
 //
@@ -8,6 +8,17 @@
 //   mode_i = 1  边缘图
 //   mode_i = 2  左半原图 + 右半边缘图
 //   mode_i = 3  画中画（边缘图缩至右下 1/4）—— 本轮未实现，暂回落为边缘图
+//
+// 【为什么叫这个名（2026-10-10 改名）】
+//   本模块原名 `image_mix`，文件在 `src/display/image_mix.v`。
+//   仓库所有者 lunaryes 在分支 `feature-image_mix` 上**同路径同名**另建了一份
+//   `image_mix.v`（101 行，只做显示模块 + 占位接线）。两边如果同名同路径并存，
+//   一是 git 合并必然 add/add 冲突，二是综合/仿真会看到**两个同名 module** 直接报错。
+//   为把 `src/display/image_mix.v` 这个路径与 `image_mix` 这个名字**让给所有者**，
+//   本次把我们的实现改名为 `edge_display_mix`（文件同名）。
+//   端口、语义、时序与改名前的 `image_mix` **完全一致**，纯改名，逻辑一字未动。
+//   引用点：`image_pipeline_top.v` 例化、`Ti60_Demo.xml` 登记、`sim/run.sh` 编译列表、
+//   `docs/INTERFACE.md` / `docs/ARCH.md` 说明。
 //
 // 【输入对齐前置条件】
 //   orig_rgb_i 与 edge_rgb_i 必须**同拍**。对齐由 image_pipeline_top 用
@@ -17,7 +28,7 @@
 //
 // 【参数化】mode 2 用输入列计数器比较 IMG_W/2，IMG_W / IMG_H 必须参数化。
 //=====================================================================
-module image_mix #(
+module edge_display_mix #(
     parameter IMG_W = 1280,
     parameter IMG_H = 720
 )(

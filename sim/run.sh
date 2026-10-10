@@ -30,7 +30,7 @@ echo "== 编译 =="
 "$IVB/iverilog.exe" -g2005 -o sim/tb.vvp \
     "$SRC/image/pix_window_3x3.v" \
     "$SRC/image/sobel_edge.v" \
-    "$SRC/display/image_mix.v" \
+    "$SRC/display/edge_display_mix.v" \
     "$SRC/common/sync_delay_align.v" \
     "$SRC/image/image_pipeline_top.v" \
     sim/tb_image_pipeline.v \

@@ -8,7 +8,7 @@
 | --- | --- | --- | --- | --- |
 | `pix_window_3x3` | `src/image/pix_window_3x3.v` | 3×3 灰度窗口（灰度化在上游完成），输出 9 个灰度像素 | I-B | 已实现 |
 | `sobel_edge` | `src/image/sobel_edge.v` | Sobel 梯度、饱和、阈值比较 | I-B | 已实现 |
-| `image_mix` | `src/display/image_mix.v` | 原图与边缘图的分屏合成 | I-C | 已实现（mode 0/1/2） |
+| `edge_display_mix` | `src/display/edge_display_mix.v` | 原图与边缘图的分屏合成 | I-C | 已实现（mode 0/1/2） |
 | `image_pipeline_top` | `src/image/image_pipeline_top.v` | 流水线顶层，串联上述模块并做旁路 | I-A | 已实现 |
 | `sync_delay_align` | `src/common/sync_delay_align.v` | 通用延迟对齐，把旁路路径与算法路径打齐 | — | 已实现 |
 | `image_line_shift_ram_8bit` | `src/image/image_line_shift_ram_8bit.v` | `src/isp/Line_Shift_RAM_8Bit.v` 的参考副本 | — | 未采用，不入工程 |
@@ -35,7 +35,7 @@ clk, rst_n, vsync_i, de_i, <data_in>, <ctrl_in>, vsync_o, de_o, <data_out>
 | --- | --- |
 | `pix_window_3x3` | 2 拍（+ 垂直 1 行） |
 | `sobel_edge` | 4 拍 |
-| `image_mix` | 1 拍 |
+| `edge_display_mix` | 1 拍 |
 | `image_pipeline_top` 合计 | **7 拍**（+ 垂直 1 行） |
 
 **`hsync` 必须同步延迟 7 拍**：`image_pipeline_top` 的端口没有 `hs`，因此
@@ -132,12 +132,18 @@ module sobel_edge #(
 - 系数 2 用左移一位（位拼接）实现，**无乘法器、不占 DSP**。
 - `|Gx| + |Gy|` 上界 2040，用 11 bit 承载后饱和到 255。
 
-## 5. I-C `image_mix`
+## 5. I-C `edge_display_mix`
+
+> **改名说明（2026-10-10）**：本模块原名 `image_mix`（文件 `src/display/image_mix.v`）。
+> 仓库所有者 lunaryes 在分支 `feature-image_mix` 上同路径同名另建了一份 `image_mix.v`，
+> 同名同路径并存会导致 git add/add 冲突且综合报重复 module。为把该路径与名字让给所有者，
+> 我们的实现改名为 `edge_display_mix`（文件 `src/display/edge_display_mix.v`）。
+> **端口、语义、时序与改名前的 `image_mix` 完全一致，纯改名。**
 
 把原图与边缘图合成为一路 RGB888。
 
 ```verilog
-module image_mix #(
+module edge_display_mix #(
     parameter IMG_W = 1280,
     parameter IMG_H = 720
 )(
@@ -196,7 +202,7 @@ module image_pipeline_top #(
   简单地把 `rgb_i` 接到 MUX。原图取 `pix_window_3x3` 输出的中心像素 `p22`
   （与 Sobel 的窗口中心天然同源同拍，省掉一整块行缓存），再用
   `sync_delay_align #(.DEPTH(4))` 补上 `sobel_edge` 的 4 级流水延迟。
-  两条路径延迟完全相同后才进 `image_mix` 的 MUX。
+  两条路径延迟完全相同后才进 `edge_display_mix` 的 MUX。
 - **对外延迟 `LATENCY = 7` 拍**（+ 垂直 1 行），即
   `vsync_o/de_o` 相对 `vsync_i/de_i` 延迟 7 拍。`example_top` 必须把 `hsync`
   也延迟 7 拍（见 §2）。

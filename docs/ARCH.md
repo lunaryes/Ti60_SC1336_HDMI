@@ -43,7 +43,7 @@ rgb_i[23:0] ──► pix_window_3x3 ──┬──► sobel_edge ──► mag
                                                           ▼
                                               mode 选择 / 着色 / 旁路 MUX
                                                           │
-                                                    image_mix
+                                              edge_display_mix
                                                           ▼
                                                     rgb_o[23:0] ──► FrameBoundCrop
 ```
@@ -101,7 +101,7 @@ image_pipeline_top #(
 | `src/image/rgb_to_gray.v` | 上一轮已完成，保持不动 |
 | `src/image/pix_window_3x3.v` | 本轮实现（LATENCY = 2 拍） |
 | `src/image/sobel_edge.v` | 本轮实现（LATENCY = 4 拍） |
-| `src/display/image_mix.v` | 本轮实现（mode 0/1/2；mode 3 待实现） |
+| `src/display/edge_display_mix.v` | 本轮实现（mode 0/1/2；mode 3 待实现）。**2026-10-10 由 `image_mix` 改名**，腾出 `src/display/image_mix.v` 给所有者分支 |
 | `src/common/sync_delay_align.v` | 本轮实现 |
 | `src/image/image_pipeline_top.v` | 本轮实现（对外 LATENCY = 7 拍） |
 | `src/image/image_line_shift_ram_8bit.v` | `Line_Shift_RAM_8Bit` 参考副本，**未采用、不入工程** |
@@ -119,7 +119,7 @@ image_pipeline_top #(
 | **`hsync` 必须单独补延迟** | `image_pipeline_top` 端口里没有 `hs`，若不管它，HS 与 DE 会错开 7 拍，图像横移 7 个像素。必须在 `example_top` 里补 `sync_delay_align` |
 | **旁路不能直接接 MUX** | 旁路路径取 `pix_window_3x3` 的输出 `p22`（与 Sobel 的窗口中心同源同拍，省一块行缓存），再补 `sobel_edge` 的 4 拍 |
 | **固有 1 行垂直延迟** | 3x3 窗口需要"下一行"数据，末行永远算不出边缘。因此 `mode=0` 的输出相对基线**整体下移 1 行**，不是逐像素一致。回归对比要把这 1 行算进去 |
-| **`mode_i` 被硬编码会触发死代码消除** | `example_top` 里 `assign edge_mode = 2'd1` 是常量，综合器把 `image_mix` 的 `mode 2` 分支（含列计数器）整个裁掉了，报 `col[*] unreachable`。要在板上切模式，`mode_i` 必须由真实寄存器/输入驱动（见 §10） |
+| **`mode_i` 被硬编码会触发死代码消除** | `example_top` 里 `assign edge_mode = 2'd1` 是常量，综合器把 `edge_display_mix`（原名 `image_mix`）的 `mode 2` 分支（含列计数器）整个裁掉了，报 `col[*] unreachable`。要在板上切模式，`mode_i` 必须由真实寄存器/输入驱动（见 §10） |
 | **行缓存不要照抄 `Line_Shift_RAM_8Bit`** | 它实现的是"延迟 1 行 + 1 像素"，相邻行有固定 1 像素错位，必须特判去补；且存储深度写成 `2**ADDR_WIDTH`，1280 点行占 2048 深。改用 3 个 bank 按行轮转 + 预测式读地址（读地址提前一拍发 `col+1`），三行零错位 |
 
 ## 9. 综合结果（Efinity 2026.1.132，Ti60F225 C4）
