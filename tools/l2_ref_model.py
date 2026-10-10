@@ -122,10 +122,14 @@ def main():
         cy = 0 if y < 0 else (IMG_H - 1 if y > IMG_H - 1 else y)
         return (img[cy][cx] >> 16) & 0xFF
 
-    def ref(orow, ocol):
-        """返回 (期望_bin, 期望_mag)。orow/ocol 为输出侧 DE 行列号。"""
-        top, mid, bot = orow - 2, orow - 1, orow
-        left, ctr, right = ocol - 1, ocol, ocol + 1
+    def sobel_at(m, k):
+        """按冻结公式在流位置 (m,k) 处算 Sobel -> (sat, edge)。
+
+        几何：流位置 (m,k) 的窗口中心是图像 (k, m-1)，窗口覆盖图像行 (m-2,m-1,m)、
+        列 (k-1,k,k+1)。（沿用 docs/INTERFACE.md §4 与 §6 的约定。）
+        """
+        top, mid, bot = m - 2, m - 1, m
+        left, ctr, right = k - 1, k, k + 1
 
         gx = (P(right, top) + 2 * P(right, mid) + P(right, bot)) - \
              (P(left,  top) + 2 * P(left,  mid) + P(left,  bot))
@@ -134,8 +138,11 @@ def main():
 
         mag = abs(gx) + abs(gy)
         sat = 255 if mag > 255 else mag
-        edge = 1 if sat > THR else 0
+        return sat, (1 if sat > THR else 0)
 
+    def ref(orow, ocol):
+        """返回 (期望_EDGE_BINARY=1 的实例, 期望_EDGE_BINARY=0 的实例)。"""
+        sat, edge = sobel_at(orow, ocol)
         orig = P(ocol, orow - 1)
         orig_rgb = orig * 0x010101
         e_bin = 0xFFFFFF if edge else 0x000000
@@ -146,10 +153,23 @@ def main():
         if MODE == 1:
             return e_bin, e_mag
         if MODE == 2:
-            half = IMG_W // 2
-            return (orig_rgb, orig_rgb) if ocol < half else (e_bin, e_mag)
-        # MODE 3：当前实现回落为边缘图
-        return e_bin, e_mag
+            return (orig_rgb, orig_rgb) if ocol < IMG_W // 2 else (e_bin, e_mag)
+
+        # ---------------- MODE 3 画中画 ----------------
+        # 背景 = 原图；右下 1/4 = 边缘图的 2:1 抽取（1 bit 二值）
+        if orow >= IMG_H // 2 and ocol >= IMG_W // 2:
+            PH, PW = IMG_H // 2, IMG_W // 2
+            iy, ix = orow - IMG_H // 2, ocol - IMG_W // 2
+            # 读侧跳过抽取后第 0 行/第 0 列（含首行/首列固有偏差），末尾钳位
+            dy = min(iy + 1, PH - 1)
+            dx = min(ix + 1, PW - 1)
+            # 该样点取自流位置 (2*dy, 2*dx)
+            s_sat, s_edge = sobel_at(2 * dy, 2 * dx)
+            # 缓冲存的是 edge_rgb_i == 24'hFFFFFF：二值实例=边缘位；幅值实例=满幅值
+            b = 0xFFFFFF if s_edge else 0x000000
+            m = 0xFFFFFF if s_sat == 255 else 0x000000
+            return b, m
+        return orig_rgb, orig_rgb
 
     def classify(m, k):
         """把输出像素归类。
