@@ -37,15 +37,15 @@ CMOS_Capture_RAW_Gray ──► Sensor_Image_XYCrop ──► ddr_rw_ctrl
 ## 2. 新增流水线内部结构
 
 ```
-rgb_i[23:0] ──► pix_window_3x3 ──┬──► sobel_edge ──► mag/edge
-                                 │                        │
-                                 └──► (可选) 中值滤波 ────┘
-                                                          ▼
-                                              mode 选择 / 着色 / 旁路 MUX
-                                                          │
-                                                    image_mix
-                                                          ▼
-                                                    rgb_o[23:0] ──► FrameBoundCrop
+rgb_i[23:0] ──► rgb_to_gray ──► pix_window_3x3 ──┬──► sobel_edge ──► mag/edge
+                                                 │                        │
+                                                 └──► (可选) 中值滤波 ────┘
+                                                                          ▼
+                                                              mode 选择 / 着色 / 旁路 MUX
+                                                                          │
+                                                                    image_mix
+                                                                          ▼
+                                                             rgb_o[23:0] ──► FrameBoundCrop
 ```
 
 `pix_window_3x3` 只例化一次，Sobel 与中值**共享同一组 9 个像素**（并行消费），
@@ -53,17 +53,28 @@ rgb_i[23:0] ──► pix_window_3x3 ──┬──► sobel_edge ──► mag
 
 ## 3. 时钟域
 
-全部在 `clk_pixel`（74.4 MHz）单域。详见 `INTERFACE.md` §2。
+全部在 `clk_pixel`（74.25 MHz）单域。详见 `INTERFACE.md` §2。
 
 ## 4. 资源预算（初步）
 
 | 资源 | 预估占用 | 说明 |
 | --- | --- | --- |
-| 行缓存 BRAM | 2 × 1280 × 8 bit ≈ 20 kbit | `pix_window_3x3` 的两行历史数据 |
+| 行缓存 BRAM | 3 × 1280 × 8 bit ≈ 30 kbit | `pix_window_3x3` 的 3 个行 bank，按行轮转、1 写 2 读 |
 | 乘法器 / DSP | 3（灰度化）+ 4~8（Sobel） | 灰度系数是常数，可用移位加法代替乘法器 |
 | 逻辑 LUT | 数百~千级 | Sobel 4 级流水 + 合成 |
 
 目标总占用不超过 Ti60F225 的 70%，由集成阶段持续跟踪。
+
+**实测（2026-10-10，Efinity 2026.1 `efx_map`，工程含全部外设）**：
+
+| 模块 | FF | LUT | RAM |
+| --- | --- | --- | --- |
+| `u_pix_window_3x3` | 128 | 149 | 6 × EFX_RAM10 |
+| `u_image_pipeline`（整条流水线） | 294 | 243 | 6 × EFX_RAM10 |
+
+改 BRAM 版之前，`u_pix_window_3x3` 是 20605 FF + 17377 LUT + 0 RAM —— 两行缓存用
+异步读写成寄存器数组，推断不出 BRAM，占掉全器件约 1/4 的逻辑。**行缓存必须用
+同步读**（读地址打在寄存器上），这是本工程踩过的坑，别再写成组合读。
 
 ## 5. 插入点接线（`example_top.v` 唯一改动处）
 

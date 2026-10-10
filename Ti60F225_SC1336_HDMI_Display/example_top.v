@@ -1106,27 +1106,39 @@ assign w_rgb_g = w_rgb_pre_g;
 assign w_rgb_b = w_rgb_b_mult[17:16] ? 8'hFF : w_rgb_b_mult[15: 8]; 
 
 // =========================================================================================================================================
-// RGB to gray
+// Image pipeline : rgb_to_gray -> pix_window_3x3 -> sobel_edge -> image_mix
+// 插入点：AWB 之后、FrameBoundCrop 之前（docs/ARCH.md §1），全部在 clk_pixel 单域
 // =========================================================================================================================================
-wire                                    gray_vs                    ;
-wire                                    gray_hs                    ;
-wire                                    gray_de                    ;
-wire                   [  23:0]         gray_rgb                   ;
+localparam IMG_MODE = 2'd3;      // 0=原图 1=边缘图 2=分屏(左原图+右边缘) 3=画中画(暂等同分屏)
+localparam IMG_THR  = 8'd40;     // Sobel 阈值：edge = mag > thr
 
-rgb_to_gray u_rgb_to_gray (
-    .clk                               (clk_pixel                 ),
-    .rst_n                             (rstn_pixel                ),
+wire                                    pipe_vs                    ;
+wire                                    pipe_de                    ;
+wire                   [  23:0]         pipe_rgb                   ;
 
-    .vs_i                              (w_rgb_vsync               ),
-    .hs_i                              (w_rgb_hsync               ),
+image_pipeline_top #(.IMG_W(1280),.IMG_H(720)) u_image_pipeline(
+    .clk_i                             (clk_pixel                 ),
+    .rst_ni                            (rstn_pixel                ),
+
+    .vsync_i                           (w_rgb_vsync               ),
     .de_i                              (w_rgb_href                ),
     .rgb_i                             ({w_rgb_r, w_rgb_g, w_rgb_b}),
+    .thr_i                             (IMG_THR                   ),
+    .mode_i                            (IMG_MODE                  ),
 
-    .vs_o                              (gray_vs                   ),
-    .hs_o                              (gray_hs                   ),
-    .de_o                              (gray_de                   ),
-    .rgb_o                             (gray_rgb                  )
+    .vsync_o                           (pipe_vs                   ),
+    .de_o                              (pipe_de                   ),
+    .rgb_o                             (pipe_rgb                  )
 );
+
+// hsync 要比 de 早 8 个像素才与流水线后的数据同拍（= image_pipeline_top 的 LATENCY），
+// 否则 rgb2dvi 送出的 HS 与 DE 错位，HDMI 画面横移。
+reg [7:0] r_hs_dly = 8'd0;
+always @(posedge clk_pixel or negedge rstn_pixel) begin
+    if (!rstn_pixel) r_hs_dly <= 8'd0;
+    else             r_hs_dly <= {r_hs_dly[6:0], w_rgb_hsync};
+end
+wire                                    pipe_hs  = r_hs_dly[7]     ;
 
 wire                                    boundcrop_vs               ;
 wire                                    boundcrop_hs               ;
@@ -1135,16 +1147,16 @@ wire                   [  23:0]         boundcrop_data             ;
 FrameBoundCrop #(.SKIP_ROWS(2),.SKIP_COLS(2),.TOTAL_ROWS(720),.TOTAL_COLS(1280)) inst2_FrameCrop(
     .clk_i                             (clk_pixel                 ),
     .rst_i                             (~rstn_pixel               ),
-	
-    .vs_i                              (gray_vs                   ),
-    .hs_i                              (gray_hs                   ),
-    .de_i                              (gray_de                   ),
-    .data_i                            (gray_rgb                  ),
-	
+
+    .vs_i                              (pipe_vs                   ),
+    .hs_i                              (pipe_hs                   ),
+    .de_i                              (pipe_de                   ),
+    .data_i                            (pipe_rgb                  ),
+
     .vs_o                              (boundcrop_vs              ),
     .hs_o                              (boundcrop_hs              ),
     .de_o                              (boundcrop_de              ),
-    .data_o                            (boundcrop_data            ) 
+    .data_o                            (boundcrop_data            )
 );
 
 

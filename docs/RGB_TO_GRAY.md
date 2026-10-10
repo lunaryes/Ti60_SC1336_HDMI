@@ -1,3 +1,10 @@
+# RGB → 灰度（RGB_TO_GRAY）
+
+> **集成状态（2026-10-10）**：`rgb_to_gray` 现在是 `image_pipeline_top` 内部的第 1 级
+> （`rgb_i → rgb_to_gray → pix_window_3x3 → sobel_edge → image_mix`），初版"直接把灰度图送
+> `FrameBoundCrop`"的做法已废弃，`example_top` 不再单独例化它。本文的公式、位宽、延迟仍然有效；
+> §3 的接线示意仅作历史参考。当前接口以 `INTERFACE.md` §6 为准。
+
 ## 1. 灰度公式
 
 使用常见定点亮度公式：
