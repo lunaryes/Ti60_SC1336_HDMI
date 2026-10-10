@@ -255,3 +255,19 @@ export PATH="/d/下载迁移文件夹/iverilog/bin:$PATH"     # Git Bash
 iverilog -g2005 -o sim/tb.vvp <源文件列表> && vvp sim/tb.vvp
 ```
 
+
+## 12. L2 验证（与 Python 参考模型逐像素比对）
+
+对应 `PR 模板` 的 L2 要求，**已完成**，报告见 **`docs/L2_VERIFY.md`**，
+机器输出见 `sim/l2_report.txt`，复跑 `sh sim/l2_verify.sh`。
+
+- 方法与产物：`sim/tb_l2_dump.v` 把源像素流与两条实例
+  （`EDGE_BINARY=1` 二值 / `=0` 幅值）的输出流转储成文本；
+  `tools/l2_ref_model.py` 只按 `docs/INTERFACE.md` 冻结的数学定义**独立重算**，
+  不读 RTL 代码，逐像素比对。
+- 覆盖：`MODE = 0/1/2/3` × `THR = 40/100` 共 8 组，每组 2 实例 × 2640 个可见点，
+  合计 42 240 点，**可见区 0 不符**。
+- 判定区域按 `FrameBoundCrop` 每边各裁 2 行 2 列后的可见区取（行 ∈ [2,45]、
+  列 ∈ [2,61]）。裁剪区另有少量差异，全部落在列 1（行首列流水的固有偏移，
+  见 §11.4），板上不可见，符合同一「不做边界处理」契约。
+- 仍缺：**L3 上板验证**（需真实硬件）。

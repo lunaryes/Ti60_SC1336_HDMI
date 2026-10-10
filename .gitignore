@@ -54,6 +54,13 @@ outflow/
 sim/*.vvp
 sim/*.vcd
 
+# L2 逐像素验证的像素流转储与临时输出（sim/l2_verify.sh 生成，可重新生成）
+# 注：sim/l2_report.txt 是验证证据，**要提交**，故不在此列
+sim/l2_in.txt
+sim/l2_out_bin.txt
+sim/l2_out_mag.txt
+sim/l2_tmp.txt
+
 sim/work/
 sim/out/
 sim/transcript
