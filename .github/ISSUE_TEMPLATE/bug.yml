@@ -37,8 +37,10 @@ body:
       description: 命令、输入激励、分支与 commit
       placeholder: |
         分支/commit：
-        命令：bash sim/scripts/run_iverilog.sh ...
-        激励：sim/vectors/xxx.hex
+        L1 复现：sh sim/run.sh
+        L2 复现：sh sim/l2_verify.sh
+        激励：TB 内建图案（见 sim/tb_*.v 顶部注释），或自定义输入
+        报告：sim/l2_report.txt
     validations:
       required: true
 

@@ -7,7 +7,7 @@ body:
     id: unit
     attributes:
       label: 交付单元
-      description: 对应《模块划分与文件归属》§5 的交付单元
+      description: 对应 CONTRIBUTING.md §2.1 定义的交付单元
       options:
         - U1 3x3 像素窗口发生器
         - U2 Sobel 边缘检测
@@ -34,7 +34,7 @@ body:
       description: 具体到文件路径
       placeholder: |
         - src/image/pix_window_3x3.v
-        - sim/tb/tb_pix_window_3x3.v
+        - sim/tb_pix_window_3x3.v
     validations:
       required: true
 
