@@ -101,7 +101,7 @@ image_pipeline_top #(
 | `src/image/rgb_to_gray.v` | 上一轮已完成，保持不动 |
 | `src/image/pix_window_3x3.v` | 本轮实现（LATENCY = 2 拍） |
 | `src/image/sobel_edge.v` | 本轮实现（LATENCY = 4 拍） |
-| `src/display/edge_display_mix.v` | 本轮实现（mode 0/1/2；mode 3 待实现）。**2026-10-10 由 `image_mix` 改名**，腾出 `src/display/image_mix.v` 给所有者分支 |
+| `src/display/edge_display_mix.v` | 本轮实现（mode 0/1/2/3）。**2026-10-10 由 `image_mix` 改名**，腾出 `src/display/image_mix.v` 给所有者分支；同日补齐 mode 3 画中画（1 bit 二值 + 2:1 抽取，见 §12 与 INTERFACE §5） |
 | `src/common/sync_delay_align.v` | 本轮实现 |
 | `src/image/image_pipeline_top.v` | 本轮实现（对外 LATENCY = 7 拍） |
 | `src/image/image_line_shift_ram_8bit.v` | `Line_Shift_RAM_8Bit` 参考副本，**未采用、不入工程** |
@@ -139,8 +139,48 @@ image_pipeline_top #(
 | Memory Blocks | 56 / 256 = **21.88%**；其中算法流水线只占 **6 块** |
 | DSP Blocks | 4 / 160 = 2.50%；**Sobel 用 0 个 DSP**（系数 2 用移位实现） |
 
-结论：资源远低于 70% 预算目标，`mode 3`（画中画，约需 1.8 Mbit 缓冲 ≈ 额外几十块 BRAM）
-在预算内是可以做的。
+结论：资源远低于 70% 预算目标。
+
+> **勘误（2026-10-10）**：上一段初稿写 `mode 3`「约需 1.8 Mbit 缓冲」是**按 8 bit/像素误算**。
+> 全彩画中画实需 `640×360×24 = 5.53 Mbit`，**超出 Ti60 全部 EBR（2.56 Mbit）**，根本放不下。
+> 因此 `mode 3` 落地时降级为 **1 bit 二值 + 2:1 抽取**，只需 `640×360/8 ≈ 230 Kbit`（约 23 块 EBR）。
+> 详细账见 `docs/INTERFACE.md` §5。
+
+### 9.1 重综合结果（2026-10-10，mode 3 落地后）
+
+在 `edge_display_mix` 落地 mode 3（1 bit 二值 + 2:1 抽取）后**重新走完整流程**：
+
+| 项目 | 结果 |
+| --- | --- |
+| map / interface / pnr / pgm / export_bitstream | **全 PASS**（`export_bitstream` 连续两次通过），bitstream 已生成 |
+| 时序 | **0 个负 slack**。最差 setup slack **0.312 ns** 出现在 `core_clk ↔ twd_clk`（DDR3 控制器跨时钟路径），**与算法流水线无关**。算法域 setup slack：`cmos_pclk` **+6.787 ns**、`clk_sys` **+3.673 ns**、`clk_pixel` **+8.079 ns**，余量充裕 |
+| hold | 全部为正，最差 **+0.020 ns**（`twd_clk` 域） |
+| XLR（逻辑） | 6924 / 60800 = **11.39%**（较上一版 +8） |
+| Memory Blocks | 56 / 256 = **21.88%**；算法流水线占 **6 块** |
+| DSP Blocks | 4 / 160 = 2.50% |
+| I/O | Inputs 65/1703、Outputs 481/2267（3.82% / 21.22%） |
+| Global Clocks | 14 / 32 = 43.75% |
+
+算法流水线子树实际占用（`Ti60_Demo.res.csv` / `hier_util.rpt`）：
+
+| 实例 | FF | ADD | LUT | RAM |
+| --- | --- | --- | --- | --- |
+| `u_image_pipeline_top` 合计 | 226 | 132 | 160 | 6 |
+| ├ `u_pix_window_3x3` | 128 | 0 | 133 | 6 |
+| ├ `u_sobel_edge` | 85 | 132 | 25 | 0 |
+| ├ `u_sync_delay_align` | 10 | 0 | 1 | 1(SRL) |
+| └ `u_edge_display_mix` | 3 | 0 | 1 | **0** |
+| `u_rgb_to_gray`（上游） | 10 | 31 | 8 | 0（另 3 DSP） |
+
+> **重要观察**：`u_edge_display_mix` 只报 **3 FF / 1 LUT / 0 RAM** —— mode 3 的抽取缓冲
+> **被综合器整体裁掉了**。原因是 `example_top` 里 `assign edge_mode = 2'd1` 是常量，
+> mode 0/2/3 全部成为死代码。**本节的资源数字是"当前常量配置下"的数字，不是 mode 3 的真实资源**。
+> 要让 mode 3 真正上板，必须先解开 §10 第 1 条（`mode_i` 接真实来源）。
+> 届时 buffer 会实际占用约 23 块 EBR（`28800 B` 二值位流，`1 bit` 存储 + EBR 位宽 40 时按
+> `28800/8 = 3600` 字，四舍五入到 `ceil(3600/160) = 23` 块）。
+>
+> 逐像素功能正确性由 L2 参考模型验证（8 组 `MODE × THR` 组合全部 PASS），**与综合裁不裁无关** ——
+> 见 §12 与 `docs/L2_VERIFY.md`。
 
 ## 10. 待决问题
 
@@ -152,7 +192,11 @@ image_pipeline_top #(
    - 用计数器定时自动轮换 mode/thr 做演示（最简单）
    - 加真实按键 → 必须由集成负责人在 Interface Designer 里重新生成
      `.peri.xml` / `.pt.sdc`（禁止手改）
-2. **`mode 3`（画中画）** 本轮未实现，资源预算允许，需要 640×360 缓冲与读写仲裁。
+2. ~~**`mode 3`（画中画）** 本轮未实现~~ —— **已决（2026-10-10）：已实现**。
+   采用 1 bit 二值 + 2:1 抽取降级方案（全彩 5.53 Mbit > 2.56 Mbit EBR，放不下，见 §9 勘误），
+   代码在 `src/display/edge_display_mix.v`，逐像素由 L2 参考模型验证通过（见 §12）。
+   **遗留**：受 §10 第 1 条（`mode_i` 硬编码）拖累，综合器把缓冲 DCE 掉了，
+   此模式当前**只在仿真里生效**，上板要等 `mode_i` 接真实来源。
 3. **回归对比**：`mode=0` 与基线存在固有 1 行垂直偏移，对比脚本要按此对齐。
 4. **仿真**：已用本机 D 盘的 Icarus Verilog 14.0 跑通，全部 288 次检查通过（详见 §11）。
    一键复跑：`sh sim/run.sh`。

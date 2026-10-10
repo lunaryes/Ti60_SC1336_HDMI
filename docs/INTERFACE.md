@@ -8,7 +8,7 @@
 | --- | --- | --- | --- | --- |
 | `pix_window_3x3` | `src/image/pix_window_3x3.v` | 3×3 灰度窗口（灰度化在上游完成），输出 9 个灰度像素 | I-B | 已实现 |
 | `sobel_edge` | `src/image/sobel_edge.v` | Sobel 梯度、饱和、阈值比较 | I-B | 已实现 |
-| `edge_display_mix` | `src/display/edge_display_mix.v` | 原图与边缘图的分屏合成 | I-C | 已实现（mode 0/1/2） |
+| `edge_display_mix` | `src/display/edge_display_mix.v` | 原图与边缘图的合成（含画中画） | I-C | 已实现（mode 0/1/2/3） |
 | `image_pipeline_top` | `src/image/image_pipeline_top.v` | 流水线顶层，串联上述模块并做旁路 | I-A | 已实现 |
 | `sync_delay_align` | `src/common/sync_delay_align.v` | 通用延迟对齐，把旁路路径与算法路径打齐 | — | 已实现 |
 | `image_line_shift_ram_8bit` | `src/image/image_line_shift_ram_8bit.v` | `src/isp/Line_Shift_RAM_8Bit.v` 的参考副本 | — | 未采用，不入工程 |
@@ -165,14 +165,26 @@ module edge_display_mix #(
 | 0 | 原图 | 已实现 |
 | 1 | 边缘图 | 已实现 |
 | 2 | 左半原图 + 右半边缘图 | 已实现 |
-| 3 | 画中画：边缘图缩放至右下角 1/4 | **本轮未实现**，暂回落为边缘图 |
+| 3 | 画中画：背景原图，右下 1/4 内嵌边缘图（缩放 1/4） | **已实现**（2026-10-10，降级为 1 bit 二值 + 2:1 抽取，见下） |
 
-- 输出寄存 1 拍，延迟固定为 1。
+- 输出寄存 1 拍，延迟固定为 1（四种模式一致）。
 - **前置条件**：`orig_rgb_i` 与 `edge_rgb_i` 必须同拍。对齐由 `image_pipeline_top`
   用 `sync_delay_align` 保证，本模块不做任何延迟补偿。
-- `mode_i` 为 2/3 时用输入列计数器比较 `IMG_W/2`，`IMG_W` 参数化。
-- mode 3 的资源账：右下角 1/4 缩放需要一块 640×360 ≈ 1.8 Mbit 的缓冲，且要在
-  写当前帧的同时读出来输出，BRAM 占用可能顶到预算，故后置。
+- `mode_i` 为 2 时用输入列计数器比较 `IMG_W/2`；mode 3 用行列计数器定位右下 1/4。
+- **mode 3 的资源账与降级**（2026-10-10 落地）：
+  - 目标「640×360 内嵌图」若存**全彩**需 `640×360×24 = 5.53 Mbit`，
+    **超过 Ti60F225 全部 EBR（约 2.56 Mbit / 256 块）**，放不下 —— 原文写的
+    「约 1.8 Mbit」是按 8 bit/像素 误算的。
+  - 实际实现：内嵌图存 **1 bit/像素的二值边缘图**，`640×360 bit = 230 Kbit`
+    （约 23 个 EBR 块），水平与垂直各 2:1 抽取（取每个 2×2 块的左上样点）。
+  - 内嵌图**恒为二值**，与 `EDGE_BINARY` 无关（缓冲只有 1 bit）。内容取
+    `edge_rgb_i == 24'hFFFFFF`：在 `EDGE_BINARY=1`（默认）下就是二值边缘标志；
+    在 `EDGE_BINARY=0` 下退化为「幅值饱和到 255」的像素。
+  - **取样偏移**：`pix_window_3x3` 在帧首行/行首两列有固有偏差（`§3` 的边界行为），
+    若 1:1 铺进内嵌图会把它搬上屏幕（这两行/列在整幅图上**不会**被裁剪）。
+    故读侧跳过抽取后的第 0 行/第 0 列、末尾钳位，钳位点落在被裁剪的输出最外圈。
+    写侧不加偏移（保证每抽取行正好 80 整字节、无读写同拍冲突）。
+  - 内嵌图可见部分已由 L2 逐像素验证覆盖（`docs/L2_VERIFY.md`，MODE=3 可见区 0 不符）。
 
 ## 6. I-A `image_pipeline_top`
 
