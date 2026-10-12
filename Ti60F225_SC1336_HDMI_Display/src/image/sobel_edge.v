@@ -2,8 +2,12 @@
 
 // 3x3 Sobel edge detector.
 // The nine gray pixels are supplied by pix_window_3x3.  The module uses
-// |Gx| + |Gy| as the gradient magnitude and saturates it to eight bits.
-module sobel_edge (
+// max(|Gx|, |Gy|) + min(|Gx|, |Gy|)/2 as a low-cost magnitude estimate.
+// gray_edge_o overlays white edges on a contrast-enhanced grayscale image.
+module sobel_edge #(
+    // 0 keeps the original contrast, 1 doubles it, 2 quadruples it, etc.
+    parameter integer CONTRAST_SHIFT = 1
+)(
     input  wire       clk,
     input  wire       rst_n,
 
@@ -23,7 +27,8 @@ module sobel_edge (
     output reg        vsync_o,
     output reg        de_o,
     output reg  [7:0] mag_o,
-    output reg        edge_o
+    output reg        edge_o,
+    output reg  [7:0] gray_edge_o
 );
 
     // Extend each unsigned eight-bit pixel to a signed value before
@@ -50,12 +55,35 @@ module sobel_edge (
 
     wire [11:0] abs_gx = gx[11] ? -gx : gx;
     wire [11:0] abs_gy = gy[11] ? -gy : gy;
-    wire [12:0] mag_sum = {1'b0, abs_gx} + {1'b0, abs_gy};
+    wire [11:0] grad_max = (abs_gx >= abs_gy) ? abs_gx : abs_gy;
+    wire [11:0] grad_min = (abs_gx >= abs_gy) ? abs_gy : abs_gx;
+    wire [12:0] mag_approx = {1'b0, grad_max} +
+                             ({1'b0, grad_min} >> 1);
 
-    // The exact Sobel magnitude can reach 2040.  Keep an eight-bit result
-    // by clamping every value above 255 to 255.
-    wire [7:0] mag_sat = (mag_sum[12:8] != 5'd0) ? 8'hff : mag_sum[7:0];
+    // Keep an eight-bit result by clamping every value above 255 to 255.
+    wire [7:0] mag_sat = (mag_approx > 13'd255) ? 8'hff
+                                                : mag_approx[7:0];
     wire       edge_comb = (mag_sat > thr_i);
+
+    // Contrast stretch around middle gray (128).  CONTRAST_SHIFT=1 gives:
+    //   gray < 128 : 128 - 2 * (128 - gray)
+    //   gray >=128 : 128 + 2 * (gray - 128)
+    // Both sides are saturated to the legal 0..255 range.
+    wire [15:0] gray_ext = {8'd0, p22};
+    wire [15:0] contrast_delta = (p22 >= 8'd128)
+                               ? (gray_ext - 16'd128)
+                               : (16'd128 - gray_ext);
+    wire [15:0] contrast_scaled = contrast_delta << CONTRAST_SHIFT;
+    wire [15:0] contrast_high = 16'd128 + contrast_scaled;
+    wire [7:0] contrast_gray = (p22 >= 8'd128)
+                              ? ((contrast_high > 16'd255)
+                                 ? 8'hff : contrast_high[7:0])
+                              : ((contrast_scaled >= 16'd128)
+                                 ? 8'h00
+                                 : (8'd128 - contrast_scaled[7:0]));
+
+    // A detected edge is always white; other pixels retain enhanced gray.
+    wire [7:0] gray_edge_comb = edge_comb ? 8'hff : contrast_gray;
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -63,11 +91,13 @@ module sobel_edge (
             de_o    <= 1'b0;
             mag_o   <= 8'd0;
             edge_o  <= 1'b0;
+            gray_edge_o <= 8'd0;
         end else begin
             vsync_o <= vsync_i;
             de_o    <= de_i;
             mag_o   <= de_i ? mag_sat : 8'd0;
             edge_o  <= de_i ? edge_comb : 1'b0;
+            gray_edge_o <= de_i ? gray_edge_comb : 8'd0;
         end
     end
 
