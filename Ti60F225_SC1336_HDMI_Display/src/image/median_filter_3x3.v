@@ -1,9 +1,19 @@
 `timescale 1ns / 1ps
 
-// 3x3 median filter.
-// The nine inputs come from pix_window_3x3.  An odd-even sorting network
-// orders them combinationally; stage9[4] is therefore the median value.
-module median_filter_3x3 (
+// Edge-preserving 3x3 median filter.
+//
+// A reduced median network first sorts each row, then obtains the median of
+// nine pixels from the row minima, medians and maxima. Compared with a full
+// nine-phase sort this has a shorter combinational path and uses fewer
+// compare/select operations.
+//
+// With IMPULSE_ONLY=1, the centre pixel is replaced only when it is a local
+// extreme and differs sufficiently from the neighbourhood median. This
+// removes salt-and-pepper noise without blurring every valid edge pixel.
+module median_filter_3x3 #(
+    parameter integer IMPULSE_ONLY  = 1,
+    parameter [7:0]   IMPULSE_DELTA = 8'd24
+)(
     input  wire       clk,
     input  wire       rst_n,
 
@@ -24,133 +34,68 @@ module median_filter_3x3 (
     output reg  [7:0] gray_o
 );
 
-    function [7:0] min8;
+    function [7:0] min3;
         input [7:0] a;
         input [7:0] b;
+        input [7:0] c;
+        reg   [7:0] ab_min;
         begin
-            min8 = (a < b) ? a : b;
+            ab_min = (a < b) ? a : b;
+            min3   = (ab_min < c) ? ab_min : c;
         end
     endfunction
 
-    function [7:0] max8;
+    function [7:0] max3;
         input [7:0] a;
         input [7:0] b;
+        input [7:0] c;
+        reg   [7:0] ab_max;
         begin
-            max8 = (a < b) ? b : a;
+            ab_max = (a > b) ? a : b;
+            max3   = (ab_max > c) ? ab_max : c;
         end
     endfunction
 
-    wire [7:0] stage0 [0:8];
-    wire [7:0] stage1 [0:8];
-    wire [7:0] stage2 [0:8];
-    wire [7:0] stage3 [0:8];
-    wire [7:0] stage4 [0:8];
-    wire [7:0] stage5 [0:8];
-    wire [7:0] stage6 [0:8];
-    wire [7:0] stage7 [0:8];
-    wire [7:0] stage8 [0:8];
-    wire [7:0] stage9 [0:8];
+    function [7:0] median3;
+        input [7:0] a;
+        input [7:0] b;
+        input [7:0] c;
+        begin
+            if (a > b)
+                median3 = (b > c) ? b : ((a > c) ? c : a);
+            else
+                median3 = (a > c) ? a : ((b > c) ? c : b);
+        end
+    endfunction
 
-    assign stage0[0] = p11;
-    assign stage0[1] = p12;
-    assign stage0[2] = p13;
-    assign stage0[3] = p21;
-    assign stage0[4] = p22;
-    assign stage0[5] = p23;
-    assign stage0[6] = p31;
-    assign stage0[7] = p32;
-    assign stage0[8] = p33;
+    wire [7:0] row1_min = min3(p11, p12, p13);
+    wire [7:0] row2_min = min3(p21, p22, p23);
+    wire [7:0] row3_min = min3(p31, p32, p33);
+    wire [7:0] row1_mid = median3(p11, p12, p13);
+    wire [7:0] row2_mid = median3(p21, p22, p23);
+    wire [7:0] row3_mid = median3(p31, p32, p33);
+    wire [7:0] row1_max = max3(p11, p12, p13);
+    wire [7:0] row2_max = max3(p21, p22, p23);
+    wire [7:0] row3_max = max3(p31, p32, p33);
 
-    // Nine odd-even transposition phases sort all nine pixels.
-    assign stage1[0] = min8(stage0[0], stage0[1]);
-    assign stage1[1] = max8(stage0[0], stage0[1]);
-    assign stage1[2] = min8(stage0[2], stage0[3]);
-    assign stage1[3] = max8(stage0[2], stage0[3]);
-    assign stage1[4] = min8(stage0[4], stage0[5]);
-    assign stage1[5] = max8(stage0[4], stage0[5]);
-    assign stage1[6] = min8(stage0[6], stage0[7]);
-    assign stage1[7] = max8(stage0[6], stage0[7]);
-    assign stage1[8] = stage0[8];
+    // Median-of-nine identity for three independently sorted rows.
+    wire [7:0] lower_candidate = max3(row1_min, row2_min, row3_min);
+    wire [7:0] middle_candidate = median3(row1_mid, row2_mid, row3_mid);
+    wire [7:0] upper_candidate = min3(row1_max, row2_max, row3_max);
+    wire [7:0] median_value = median3(lower_candidate,
+                                      middle_candidate,
+                                      upper_candidate);
 
-    assign stage2[0] = stage1[0];
-    assign stage2[1] = min8(stage1[1], stage1[2]);
-    assign stage2[2] = max8(stage1[1], stage1[2]);
-    assign stage2[3] = min8(stage1[3], stage1[4]);
-    assign stage2[4] = max8(stage1[3], stage1[4]);
-    assign stage2[5] = min8(stage1[5], stage1[6]);
-    assign stage2[6] = max8(stage1[5], stage1[6]);
-    assign stage2[7] = min8(stage1[7], stage1[8]);
-    assign stage2[8] = max8(stage1[7], stage1[8]);
-
-    assign stage3[0] = min8(stage2[0], stage2[1]);
-    assign stage3[1] = max8(stage2[0], stage2[1]);
-    assign stage3[2] = min8(stage2[2], stage2[3]);
-    assign stage3[3] = max8(stage2[2], stage2[3]);
-    assign stage3[4] = min8(stage2[4], stage2[5]);
-    assign stage3[5] = max8(stage2[4], stage2[5]);
-    assign stage3[6] = min8(stage2[6], stage2[7]);
-    assign stage3[7] = max8(stage2[6], stage2[7]);
-    assign stage3[8] = stage2[8];
-
-    assign stage4[0] = stage3[0];
-    assign stage4[1] = min8(stage3[1], stage3[2]);
-    assign stage4[2] = max8(stage3[1], stage3[2]);
-    assign stage4[3] = min8(stage3[3], stage3[4]);
-    assign stage4[4] = max8(stage3[3], stage3[4]);
-    assign stage4[5] = min8(stage3[5], stage3[6]);
-    assign stage4[6] = max8(stage3[5], stage3[6]);
-    assign stage4[7] = min8(stage3[7], stage3[8]);
-    assign stage4[8] = max8(stage3[7], stage3[8]);
-
-    assign stage5[0] = min8(stage4[0], stage4[1]);
-    assign stage5[1] = max8(stage4[0], stage4[1]);
-    assign stage5[2] = min8(stage4[2], stage4[3]);
-    assign stage5[3] = max8(stage4[2], stage4[3]);
-    assign stage5[4] = min8(stage4[4], stage4[5]);
-    assign stage5[5] = max8(stage4[4], stage4[5]);
-    assign stage5[6] = min8(stage4[6], stage4[7]);
-    assign stage5[7] = max8(stage4[6], stage4[7]);
-    assign stage5[8] = stage4[8];
-
-    assign stage6[0] = stage5[0];
-    assign stage6[1] = min8(stage5[1], stage5[2]);
-    assign stage6[2] = max8(stage5[1], stage5[2]);
-    assign stage6[3] = min8(stage5[3], stage5[4]);
-    assign stage6[4] = max8(stage5[3], stage5[4]);
-    assign stage6[5] = min8(stage5[5], stage5[6]);
-    assign stage6[6] = max8(stage5[5], stage5[6]);
-    assign stage6[7] = min8(stage5[7], stage5[8]);
-    assign stage6[8] = max8(stage5[7], stage5[8]);
-
-    assign stage7[0] = min8(stage6[0], stage6[1]);
-    assign stage7[1] = max8(stage6[0], stage6[1]);
-    assign stage7[2] = min8(stage6[2], stage6[3]);
-    assign stage7[3] = max8(stage6[2], stage6[3]);
-    assign stage7[4] = min8(stage6[4], stage6[5]);
-    assign stage7[5] = max8(stage6[4], stage6[5]);
-    assign stage7[6] = min8(stage6[6], stage6[7]);
-    assign stage7[7] = max8(stage6[6], stage6[7]);
-    assign stage7[8] = stage6[8];
-
-    assign stage8[0] = stage7[0];
-    assign stage8[1] = min8(stage7[1], stage7[2]);
-    assign stage8[2] = max8(stage7[1], stage7[2]);
-    assign stage8[3] = min8(stage7[3], stage7[4]);
-    assign stage8[4] = max8(stage7[3], stage7[4]);
-    assign stage8[5] = min8(stage7[5], stage7[6]);
-    assign stage8[6] = max8(stage7[5], stage7[6]);
-    assign stage8[7] = min8(stage7[7], stage7[8]);
-    assign stage8[8] = max8(stage7[7], stage7[8]);
-
-    assign stage9[0] = min8(stage8[0], stage8[1]);
-    assign stage9[1] = max8(stage8[0], stage8[1]);
-    assign stage9[2] = min8(stage8[2], stage8[3]);
-    assign stage9[3] = max8(stage8[2], stage8[3]);
-    assign stage9[4] = min8(stage8[4], stage8[5]);
-    assign stage9[5] = max8(stage8[4], stage8[5]);
-    assign stage9[6] = min8(stage8[6], stage8[7]);
-    assign stage9[7] = max8(stage8[6], stage8[7]);
-    assign stage9[8] = stage8[8];
+    wire [7:0] local_min = min3(row1_min, row2_min, row3_min);
+    wire [7:0] local_max = max3(row1_max, row2_max, row3_max);
+    wire [7:0] centre_delta = (p22 >= median_value)
+                            ? (p22 - median_value)
+                            : (median_value - p22);
+    wire centre_is_impulse = (((p22 == local_min) && (p22 < median_value)) ||
+                              ((p22 == local_max) && (p22 > median_value))) &&
+                             (centre_delta >= IMPULSE_DELTA);
+    wire [7:0] filtered_pixel = (!IMPULSE_ONLY || centre_is_impulse)
+                              ? median_value : p22;
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -160,7 +105,7 @@ module median_filter_3x3 (
         end else begin
             vsync_o <= vsync_i;
             de_o    <= de_i;
-            gray_o  <= de_i ? stage9[4] : 8'd0;
+            gray_o  <= de_i ? filtered_pixel : 8'd0;
         end
     end
 
