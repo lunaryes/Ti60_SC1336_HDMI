@@ -33,6 +33,9 @@ module pix_window_3x3 #(
 
     reg [COL_W-1:0] col_cnt;
     reg             de_d;
+    // Saturating count of complete rows received in the current frame.
+    // Only the values 0, 1 and 2 (meaning "two or more") are needed.
+    reg [1:0]       completed_rows;
 
     reg [7:0] row1_d1;
     reg [7:0] row1_d2;
@@ -42,11 +45,18 @@ module pix_window_3x3 #(
     reg [7:0] row3_d2;
 
     wire line_start = de_i && !de_d;
+    wire line_end   = !de_i && de_d;
+    // The first complete 3x3 window is available while accepting column 2
+    // of row 2.  It is centred on pixel (1, 1), so the outer image border is
+    // intentionally excluded from processing.
+    wire window_valid = (IMG_W >= 3) && de_i &&
+                        (completed_rows == 2'd2) && (col_cnt >= 2);
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             col_cnt <= {COL_W{1'b0}};
             de_d    <= 1'b0;
+            completed_rows <= 2'd0;
 
             vsync_o <= 1'b0;
             de_o    <= 1'b0;
@@ -70,10 +80,13 @@ module pix_window_3x3 #(
         end else begin
             de_d    <= de_i;
             vsync_o <= vsync_i;
-            de_o    <= de_i;
+            // de_o denotes a valid 3x3 window, rather than merely an active
+            // input pixel.  Downstream filters must ignore pixels when low.
+            de_o    <= !vsync_i && window_valid;
 
             if (vsync_i) begin
                 col_cnt <= {COL_W{1'b0}};
+                completed_rows <= 2'd0;
 
                 row1_d1 <= 8'd0;
                 row1_d2 <= 8'd0;
@@ -81,55 +94,85 @@ module pix_window_3x3 #(
                 row2_d2 <= 8'd0;
                 row3_d1 <= 8'd0;
                 row3_d2 <= 8'd0;
-            end else if (de_i) begin
-                // Nonblocking assignments make the RAM reads below refer
-                // to the two preceding rows before the buffers are updated.
-                line_buf_2[col_cnt] <= line_buf_1[col_cnt];
-                line_buf_1[col_cnt] <= gray_i;
 
-                if (line_start) begin
-                    // Replicate the first column into the missing left
-                    // neighbour positions.
-                    row1_d1 <= line_buf_2[0];
-                    row1_d2 <= line_buf_2[0];
-                    row2_d1 <= line_buf_1[0];
-                    row2_d2 <= line_buf_1[0];
-                    row3_d1 <= gray_i;
-                    row3_d2 <= gray_i;
+                p11 <= 8'd0;
+                p12 <= 8'd0;
+                p13 <= 8'd0;
+                p21 <= 8'd0;
+                p22 <= 8'd0;
+                p23 <= 8'd0;
+                p31 <= 8'd0;
+                p32 <= 8'd0;
+                p33 <= 8'd0;
+            end else begin
+                if (line_end && completed_rows != 2'd2)
+                    completed_rows <= completed_rows + 2'd1;
 
-                    p11 <= line_buf_2[0];
-                    p12 <= line_buf_2[0];
-                    p13 <= line_buf_2[0];
-                    p21 <= line_buf_1[0];
-                    p22 <= line_buf_1[0];
-                    p23 <= line_buf_1[0];
-                    p31 <= gray_i;
-                    p32 <= gray_i;
-                    p33 <= gray_i;
+                if (de_i) begin
+                    // Nonblocking assignments make the RAM reads below refer
+                    // to the two preceding rows before the buffers are updated.
+                    line_buf_2[col_cnt] <= line_buf_1[col_cnt];
+                    line_buf_1[col_cnt] <= gray_i;
 
-                    col_cnt <= {{(COL_W-1){1'b0}}, 1'b1};
-                end else begin
-                    p11 <= row1_d2;
-                    p12 <= row1_d1;
-                    p13 <= line_buf_2[col_cnt];
-                    p21 <= row2_d2;
-                    p22 <= row2_d1;
-                    p23 <= line_buf_1[col_cnt];
-                    p31 <= row3_d2;
-                    p32 <= row3_d1;
-                    p33 <= gray_i;
+                    if (line_start) begin
+                        // Replicate the first column into the missing left
+                        // neighbour positions.
+                        row1_d1 <= line_buf_2[0];
+                        row1_d2 <= line_buf_2[0];
+                        row2_d1 <= line_buf_1[0];
+                        row2_d2 <= line_buf_1[0];
+                        row3_d1 <= gray_i;
+                        row3_d2 <= gray_i;
 
-                    row1_d2 <= row1_d1;
-                    row1_d1 <= line_buf_2[col_cnt];
-                    row2_d2 <= row2_d1;
-                    row2_d1 <= line_buf_1[col_cnt];
-                    row3_d2 <= row3_d1;
-                    row3_d1 <= gray_i;
+                        p11 <= line_buf_2[0];
+                        p12 <= line_buf_2[0];
+                        p13 <= line_buf_2[0];
+                        p21 <= line_buf_1[0];
+                        p22 <= line_buf_1[0];
+                        p23 <= line_buf_1[0];
+                        p31 <= gray_i;
+                        p32 <= gray_i;
+                        p33 <= gray_i;
 
-                    if (col_cnt == IMG_W - 1)
-                        col_cnt <= {COL_W{1'b0}};
-                    else
-                        col_cnt <= col_cnt + {{(COL_W-1){1'b0}}, 1'b1};
+                        col_cnt <= {{(COL_W-1){1'b0}}, 1'b1};
+                    end else begin
+                        p11 <= row1_d2;
+                        p12 <= row1_d1;
+                        p13 <= line_buf_2[col_cnt];
+                        p21 <= row2_d2;
+                        p22 <= row2_d1;
+                        p23 <= line_buf_1[col_cnt];
+                        p31 <= row3_d2;
+                        p32 <= row3_d1;
+                        p33 <= gray_i;
+
+                        row1_d2 <= row1_d1;
+                        row1_d1 <= line_buf_2[col_cnt];
+                        row2_d2 <= row2_d1;
+                        row2_d1 <= line_buf_1[col_cnt];
+                        row3_d2 <= row3_d1;
+                        row3_d1 <= gray_i;
+
+                        if (col_cnt == IMG_W - 1)
+                            col_cnt <= {COL_W{1'b0}};
+                        else
+                            col_cnt <= col_cnt + {{(COL_W-1){1'b0}}, 1'b1};
+                    end
+
+                    // Keep invalid border samples deterministic.  The line
+                    // buffers and horizontal shift registers still update above,
+                    // so valid windows become available without a pipeline stall.
+                    if (!window_valid) begin
+                        p11 <= 8'd0;
+                        p12 <= 8'd0;
+                        p13 <= 8'd0;
+                        p21 <= 8'd0;
+                        p22 <= 8'd0;
+                        p23 <= 8'd0;
+                        p31 <= 8'd0;
+                        p32 <= 8'd0;
+                        p33 <= 8'd0;
+                    end
                 end
             end
         end
