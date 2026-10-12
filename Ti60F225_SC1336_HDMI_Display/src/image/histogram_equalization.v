@@ -2,14 +2,10 @@
 
 // Frame-based grayscale histogram equalization.
 //
-// During one frame, pixels are counted in one histogram bank.  At the next
-// vsync rising edge the banks are exchanged: the completed bank is converted
-// into a 256-entry lookup table while the other bank begins counting the new
-// frame.  The lookup table is therefore applied to the following frame.
-//
-// A normal 1280 x 720 frame has 921600 active pixels.  The implementation
-// deliberately uses only de_i-qualified pixels; horizontal/vertical blanking
-// never changes the histogram.
+// One histogram bank collects the current frame while the other bank is
+// converted to a LUT and cleared. The LUT is applied to the next frame.
+// The mapping uses the measured active-pixel count and subtracts CDFmin so
+// that the occupied gray range is stretched to 0..255.
 module histogram_equalization #(
     parameter integer FRAME_PIXELS = 1280 * 720,
     parameter integer BIN_W        = 20
@@ -26,7 +22,6 @@ module histogram_equalization #(
     output reg  [7:0] gray_o
 );
 
-    // Two banks let one frame be counted while the preceding frame is read.
     reg [BIN_W-1:0] hist0 [0:255];
     reg [BIN_W-1:0] hist1 [0:255];
     reg [7:0]       equal_lut [0:255];
@@ -37,30 +32,45 @@ module histogram_equalization #(
     reg             lut_valid;
     reg             vsync_d;
     reg [7:0]       build_addr;
+    reg [BIN_W:0]   active_pixels;
+    reg [BIN_W:0]   build_pixels;
     reg [BIN_W:0]   cdf_sum;
+    reg [BIN_W:0]   cdf_min;
+    reg             cdf_min_valid;
 
-    wire            vsync_rise = vsync_i & ~vsync_d;
+    wire vsync_rise = vsync_i & ~vsync_d;
     wire [BIN_W-1:0] build_count = build_bank ? hist1[build_addr]
                                              : hist0[build_addr];
-    wire [BIN_W:0]   cdf_next = cdf_sum + build_count;
+    wire [BIN_W:0] cdf_next = cdf_sum + build_count;
+    wire first_nonzero = !cdf_min_valid && (build_count != {BIN_W{1'b0}});
+    wire [BIN_W:0] cdf_min_next = first_nonzero ? cdf_next : cdf_min;
+    wire [BIN_W:0] normalized_cdf = (cdf_next > cdf_min_next)
+                                      ? (cdf_next - cdf_min_next)
+                                      : {(BIN_W+1){1'b0}};
+    wire [BIN_W:0] normalized_pixels = (build_pixels > cdf_min_next)
+                                         ? (build_pixels - cdf_min_next)
+                                         : {(BIN_W+1){1'b0}};
+    wire [BIN_W+8:0] lut_numerator = normalized_cdf * 8'd255;
 
-    // cdf_next is at most FRAME_PIXELS.  The division is by a compile-time
-    // parameter, so synthesis can implement it as constant arithmetic.
-    wire [BIN_W+8:0] lut_numerator = cdf_next * 8'd255;
-    wire [7:0]       lut_value = (FRAME_PIXELS != 0)
-                              ? (lut_numerator / FRAME_PIXELS)
-                              : 8'd0;
+    // A uniform frame has no range to stretch; retain its original level.
+    wire [7:0] lut_value = (normalized_pixels != {(BIN_W+1){1'b0}})
+                          ? (lut_numerator / normalized_pixels)
+                          : build_addr;
 
     integer i;
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            active_bank <= 1'b0;
-            build_bank  <= 1'b0;
-            build_busy  <= 1'b0;
-            lut_valid   <= 1'b0;
-            vsync_d     <= 1'b0;
-            build_addr  <= 8'd0;
-            cdf_sum     <= {(BIN_W+1){1'b0}};
+            active_bank  <= 1'b0;
+            build_bank   <= 1'b0;
+            build_busy   <= 1'b0;
+            lut_valid    <= 1'b0;
+            vsync_d      <= 1'b0;
+            build_addr   <= 8'd0;
+            active_pixels <= {(BIN_W+1){1'b0}};
+            build_pixels <= {(BIN_W+1){1'b0}};
+            cdf_sum      <= {(BIN_W+1){1'b0}};
+            cdf_min      <= {(BIN_W+1){1'b0}};
+            cdf_min_valid <= 1'b0;
 
             vsync_o <= 1'b0;
             de_o    <= 1'b0;
@@ -69,40 +79,44 @@ module histogram_equalization #(
             for (i = 0; i < 256; i = i + 1) begin
                 hist0[i]     <= {BIN_W{1'b0}};
                 hist1[i]     <= {BIN_W{1'b0}};
-                equal_lut[i] <= 8'd0;
+                equal_lut[i] <= i[7:0];
             end
         end else begin
             vsync_d <= vsync_i;
 
-            // The output timing follows the input timing by one clk.
             vsync_o <= vsync_i;
             de_o    <= de_i;
-            // Before the first complete histogram exists, preserve the
-            // grayscale image instead of producing a black first frame.
             gray_o  <= de_i ? (lut_valid ? equal_lut[gray_i] : gray_i) : 8'd0;
 
-            // Count active grayscale pixels in the bank assigned to this
-            // frame.  build_bank always denotes the inactive bank.
             if (de_i) begin
+                active_pixels <= active_pixels + {{BIN_W{1'b0}}, 1'b1};
                 if (active_bank)
                     hist1[gray_i] <= hist1[gray_i] + {{(BIN_W-1){1'b0}}, 1'b1};
                 else
                     hist0[gray_i] <= hist0[gray_i] + {{(BIN_W-1){1'b0}}, 1'b1};
             end
 
-            // A rising vsync marks the boundary between two frames.  The
-            // former active bank holds the just-finished frame histogram.
-            if (vsync_rise) begin
-                build_bank  <= active_bank;
-                active_bank <= ~active_bank;
-                build_busy  <= 1'b1;
-                build_addr  <= 8'd0;
-                cdf_sum     <= {(BIN_W+1){1'b0}};
+            // Ignore the initial vsync before any active pixel has arrived.
+            // Normally the 256-cycle build completes within vertical blanking.
+            if (vsync_rise && !build_busy &&
+                (active_pixels != {(BIN_W+1){1'b0}})) begin
+                build_bank    <= active_bank;
+                active_bank   <= ~active_bank;
+                build_pixels  <= active_pixels;
+                active_pixels <= {(BIN_W+1){1'b0}};
+                build_busy    <= 1'b1;
+                build_addr    <= 8'd0;
+                cdf_sum       <= {(BIN_W+1){1'b0}};
+                cdf_min       <= {(BIN_W+1){1'b0}};
+                cdf_min_valid <= 1'b0;
             end else if (build_busy) begin
-                // One histogram bin is converted and cleared per clock.
-                // This takes 256 clocks, normally well inside vertical blank.
                 equal_lut[build_addr] <= lut_value;
                 cdf_sum               <= cdf_next;
+
+                if (first_nonzero) begin
+                    cdf_min       <= cdf_next;
+                    cdf_min_valid <= 1'b1;
+                end
 
                 if (build_bank)
                     hist1[build_addr] <= {BIN_W{1'b0}};
@@ -118,5 +132,8 @@ module histogram_equalization #(
             end
         end
     end
+
+    // FRAME_PIXELS remains a public compatibility parameter; the measured
+    // de_i pixel count is deliberately used for the actual normalization.
 
 endmodule
