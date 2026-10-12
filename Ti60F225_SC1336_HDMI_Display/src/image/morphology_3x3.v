@@ -5,10 +5,15 @@
 // p11..p33 are the 3 x 3 window supplied by pix_window_3x3.  Every pixel is
 // made binary by comparing it with threshold_i.  operation_i selects:
 //   1'b0 : erosion  -- output is 1 only when all nine input pixels are 1
-//   1'b1 : dilation -- output is 1 when any one input pixel is 1
+//   1'b1 : dilation -- output is 1 when any selected input pixel is 1
 //
 // For a Sobel edge image represented as 8'h00 / 8'hff, use threshold_i = 8'd128.
-module morphology_3x3 (
+// CROSS_KERNEL=1 selects the centre plus its four direct neighbours.  This
+// is less aggressive than a full square kernel, so thin Sobel edges are less
+// likely to merge during dilation or disappear during erosion.
+module morphology_3x3 #(
+    parameter integer CROSS_KERNEL = 1
+)(
     input  wire       clk,
     input  wire       rst_n,
 
@@ -43,15 +48,21 @@ module morphology_3x3 (
     wire b32 = (p32 >= threshold_i);
     wire b33 = (p33 >= threshold_i);
 
-    wire any_set = b11 | b12 | b13 |
-                   b21 | b22 | b23 |
-                   b31 | b32 | b33;
+    wire any_square = b11 | b12 | b13 |
+                      b21 | b22 | b23 |
+                      b31 | b32 | b33;
 
-    wire all_set = b11 & b12 & b13 &
-                   b21 & b22 & b23 &
-                   b31 & b32 & b33;
+    wire all_square = b11 & b12 & b13 &
+                      b21 & b22 & b23 &
+                      b31 & b32 & b33;
 
-    wire morphology_result = operation_i ? any_set : all_set;
+    wire any_cross = b12 | b21 | b22 | b23 | b32;
+    wire all_cross = b12 & b21 & b22 & b23 & b32;
+
+    wire dilation_result = CROSS_KERNEL ? any_cross : any_square;
+    wire erosion_result  = CROSS_KERNEL ? all_cross : all_square;
+
+    wire morphology_result = operation_i ? dilation_result : erosion_result;
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
