@@ -1,6 +1,6 @@
 `timescale 1ns/1ps
 //=====================================================================
-// canny_edge 验证台（当前对应 M1：高斯 + 梯度 + 幅值）
+// canny_edge 验证台（当前对应 M2：高斯 + 梯度 + 幅值 + 方向量化 + NMS）
 //---------------------------------------------------------------------
 // 结构与真实链路一致：pix_window_3x3 → canny_edge，输入是灰度流。
 // 激励图像由 sim/canny_ref.py 生成（同一套近似的 Python 参考模型），
@@ -13,6 +13,7 @@
 //   1) 对外延迟：src_de 上升沿 → canny_de 上升沿 必须是 WIN_LAT + LATENCY
 //   2) de = 0 的区段：mag_o / edge_o 必须为 0
 //   3) 每行有效像素数 = IMG_W（列对齐、不丢不重）
+//   4) 抓取从"本帧第一个输出行的行首"开始、抓满一帧（见下面的抓取注释）
 //=====================================================================
 module tb_canny_edge;
 
@@ -22,7 +23,7 @@ module tb_canny_edge;
     // 延迟常量：改 RTL 时这里要跟着改（有意写死，避免"改了 RTL 测试台自动跟随"
     // 而失去延迟回归的意义）
     localparam WIN_LAT   = 2;                  // pix_window_3x3 冻结延迟
-    localparam CANNY_LAT = 8;                  // canny_edge M1 延迟
+    localparam CANNY_LAT = 12;                 // canny_edge M2 延迟
     localparam EXP_LAT   = WIN_LAT + CANNY_LAT;
 
     localparam H_BLANK   = 6;                  // 行消隐（>= 2 拍的前提要求）
@@ -166,10 +167,11 @@ module tb_canny_edge;
     integer row_cnt = 0;                 // 当前是输出第几行
     integer short_rows = 0, long_rows = 0;
     integer cap_cnt = 0;
+    reg     cap_on  = 0;                 // 抓取使能
 
     always @(posedge clk) begin
         if (!rst_n) begin
-            row_pix = 0; row_cnt = 0;
+            row_pix = 0; row_cnt = 0; cap_on = 0;
         end else begin
             if (canny_de && !canny_de_d) begin
                 // 上一行结束，检查它的像素数
@@ -182,9 +184,16 @@ module tb_canny_edge;
             end
             if (canny_de) row_pix = row_pix + 1;
 
-            if (canny_de && frame == CAP_FRAME && fd != 0) begin
+            // 抓取必须从"本帧第一个输出行的行首"开始，不能直接按帧计数器抓：
+            // 上一帧最后一行的输出还有 1 拍落在本帧开头（流水线尾巴），直接抓会
+            // 让整个数组整体错开 1 个像素（看起来像每行右移 1 列）。
+            if (canny_de && !canny_de_d && frame == CAP_FRAME && fcyc > 4)
+                cap_on = 1'b1;
+
+            if (cap_on && canny_de && fd != 0) begin
                 $fwrite(fd, "%02x %0d\n", canny_mag, canny_edge);
                 cap_cnt = cap_cnt + 1;
+                if (cap_cnt == IMG_W*IMG_H) cap_on = 1'b0;
             end
         end
     end
