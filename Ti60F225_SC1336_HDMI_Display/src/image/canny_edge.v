@@ -1,0 +1,429 @@
+`timescale 1ns / 1ps
+//=====================================================================
+// canny_edge  —— 接口 I-B
+//---------------------------------------------------------------------
+// 硬件近似版 Canny 边缘检测（方案见 docs/CANNY_PLAN.md）。
+//
+// 【当前版本：M1 —— 高斯 + 梯度 + 幅值】
+//   只做 §3.2 高斯平滑、§3.3 Sobel 梯度、§3.4 幅值，端口与 sobel_edge
+//   完全对齐（p11..p33 / thr_i / mag_o / edge_o），可就地替换实例，在板上
+//   与 sobel 对比"高斯有没有把细节抹过头"。
+//   方向量化 + 梯度行缓存 + NMS → M2；双阈值 + 滞后 → M3；接入顶层 → M4。
+//
+// 【与 sobel_edge 的差异】
+//   1) 多一级 3x3 高斯 [1 2 1; 2 4 2; 1 2 1]/16（S1），移位加法实现、不占 DSP；
+//   2) 高斯场要取 3x3 邻域，所以多了一组行 bank（S2/S3）—— sobel_edge 直接吃
+//      灰度窗，没有这一级。方案 §3.1 原以为"全流程只需 2 个行缓存"，那是漏算
+//      了高斯场自身的行历史：高斯把 3 行压成 1 行后，Sobel 还要它上下各一行，
+//      必须自己存。实测 2 个 1280x8 bank（4 块 EFX_RAM10），见 §6 的偏差说明。
+//   3) mag / edge 语义与 sobel 保持一致：mag 饱和到 8bit，edge = (mag_sat > thr_i)，
+//      所以 M1 阶段 thr_i 与 sobel 的 thr_i 可以直接同值对比。
+//      ★ M3 引入双阈值后判据改成内部 mag8 = mag>>3 域（方案 §3.8），届时这里和
+//        docs/INTERFACE.md 要同步改成"与 sobel 的 thr_i 不可混用"。
+//
+// 【公式】
+//   g   = (p11 + 2p12 + p13 + 2p21 + 4p22 + 2p23 + p31 + 2p32 + p33) >> 4  // 0..255
+//   Gx  = (g13 + 2g23 + g33) - (g11 + 2g21 + g31)   右列 - 左列，-1020..+1020
+//   Gy  = (g31 + 2g32 + g33) - (g11 + 2g12 + g13)   下行 - 上行，-1020..+1020
+//   mag = |Gx| + |Gy|                               0..2040，L1 精确值
+//   系数 2 全部用左移一位（位拼接）实现，无乘法器、不占 DSP。
+//
+// 【流水线】LATENCY = 8 拍，vsync/de 用同深度移位寄存器对齐，
+//   与 mag_o / edge_o 严格同拍：
+//     S1 高斯             1
+//     S2 高斯场同步读     1   ← canny_win3x3 的行 bank
+//     S3 高斯场窗口       1
+//     S4 加权和           1
+//     S5 Gx / Gy          1
+//     S6 |Gx|, |Gy|       1
+//     S7 mag              1
+//     S8 输出寄存         1
+//   （sobel_edge 只有 4 拍：替换实例后 image_pipeline_top 的 ORIG_LAT 要跟着
+//     改，见方案 §5，M4 一并处理。）
+//
+// 【空间对齐】窗口中心 = 与输出同拍进入的那一像素的"上一行、左一列"（与
+//   pix_window_3x3 同一约定）；高斯场窗口在这个基础上再多一级，于是相对原图
+//   整体下移 2 行。列方向上流水线自身的滞后与窗口的"左一列"恰好抵消，
+//   净偏移 0 列——这是实测结论（在"按 de 行段抓取"的显示坐标系里：
+//     pix_window_3x3.p22 相对原图 (-1, 0)
+//     pix_window_3x3 + sobel_edge.mag 相对理想 (-1, 0)
+//     pix_window_3x3 + canny_edge(M1).mag 相对理想 (-2, 0)）
+//   ★ docs/INTERFACE.md 里"整体右下偏移 1 行 1 列"的列方向与实测不符（实为
+//     1 行 0 列），M4 更新文档时一并订正。
+//   2 行下移仍在 FrameBoundCrop 的 SKIP_ROWS = 2 黑边量级内（接缝上下错 2 行、
+//   左右不错位）；帧首因行历史被清空而产生的假边缘也只落在被裁掉的 2 行里。
+//
+// 【vsync 约定】vsync_i 为"帧有效电平"（整个有效画面期间恒高），与
+//   pix_window_3x3 一致：内部自己做帧首上升沿检测，直接透传电平即可。
+//=====================================================================
+module canny_edge #(
+    parameter integer IMG_W   = 1280,
+    parameter         LATENCY = 8        // 对外延迟（拍），与上面的推导一致
+)(
+    input  wire        clk,
+    input  wire        rst_n,
+
+    input  wire        vsync_i,
+    input  wire        de_i,
+    input  wire [7:0]  p11, p12, p13,
+    input  wire [7:0]  p21, p22, p23,
+    input  wire [7:0]  p31, p32, p33,
+    input  wire [7:0]  thr_i,
+
+    output reg         vsync_o,
+    output reg         de_o,
+    output reg  [7:0]  mag_o,
+    output reg         edge_o
+);
+
+    //-----------------------------------------------------------------
+    // S1：3x3 高斯平滑，核 [1 2 1; 2 4 2; 1 2 1]/16
+    //     行内 3 抽头（系数 2 用移位）→ 三行按 1:2:1 合并 → >>4
+    //     和的上界 16*255 = 4080，12bit 承载；>>4 后恰好 0..255，不丢范围。
+    //-----------------------------------------------------------------
+    wire [9:0] gr1 = {1'b0, p11} + {p12, 1'b0} + {1'b0, p13};   // 上行
+    wire [9:0] gr2 = {1'b0, p21} + {p22, 1'b0} + {1'b0, p23};   // 中行
+    wire [9:0] gr3 = {1'b0, p31} + {p32, 1'b0} + {1'b0, p33};   // 下行
+
+    wire [11:0] gsum = {1'b0, gr1} + {gr2, 1'b0} + {1'b0, gr3}; // 0..4080
+    wire [7:0]  g    = gsum[11:4];                              // >>4
+
+    reg [7:0] g_s1;
+    reg       vsync_s1, de_s1;
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            g_s1     <= 8'd0;
+            vsync_s1 <= 1'b0;
+            de_s1    <= 1'b0;
+        end else begin
+            g_s1     <= g;
+            vsync_s1 <= vsync_i;
+            de_s1    <= de_i;
+        end
+    end
+
+    //-----------------------------------------------------------------
+    // S2/S3：高斯场的 3x3 邻域窗口（2 个行 bank 按行轮转 + 同步读）
+    //   Sobel 需要"高斯场"的上下左右，而 pix_window_3x3 给的是灰度场，
+    //   所以这里必须自己做一窗。见 canny_win3x3 头注释。
+    //-----------------------------------------------------------------
+    wire        gwin_vs, gwin_de;
+    wire [7:0]  g11, g12, g13;
+    wire [7:0]  g21, g22, g23;
+    wire [7:0]  g31, g32, g33;
+
+    canny_win3x3 #(
+        .W     (8),
+        .IMG_W (IMG_W)
+    ) u_gwin (
+        .clk     (clk),
+        .rst_n   (rst_n),
+
+        .vsync_i (vsync_s1),
+        .de_i    (de_s1),
+        .din     (g_s1),
+
+        .vsync_o (gwin_vs),
+        .de_o    (gwin_de),
+
+        .w11 (g11), .w12 (g12), .w13 (g13),
+        .w21 (g21), .w22 (g22), .w23 (g23),
+        .w31 (g31), .w32 (g32), .w33 (g33)
+    );
+
+    //-----------------------------------------------------------------
+    // S4：四个方向的加权和（与 sobel_edge 的 S1 同构，系数 2 用移位）
+    //-----------------------------------------------------------------
+    wire [9:0] c1 = {1'b0, g11} + {g21, 1'b0} + {1'b0, g31};   // 左列
+    wire [9:0] c3 = {1'b0, g13} + {g23, 1'b0} + {1'b0, g33};   // 右列
+    wire [9:0] r1 = {1'b0, g11} + {g12, 1'b0} + {1'b0, g13};   // 上行
+    wire [9:0] r3 = {1'b0, g31} + {g32, 1'b0} + {1'b0, g33};   // 下行
+
+    reg [9:0] c1_s4, c3_s4, r1_s4, r3_s4;
+    reg       vsync_s4, de_s4;
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            c1_s4 <= 10'd0; c3_s4 <= 10'd0;
+            r1_s4 <= 10'd0; r3_s4 <= 10'd0;
+            vsync_s4 <= 1'b0; de_s4 <= 1'b0;
+        end else begin
+            c1_s4 <= c1; c3_s4 <= c3;
+            r1_s4 <= r1; r3_s4 <= r3;
+            vsync_s4 <= gwin_vs; de_s4 <= gwin_de;
+        end
+    end
+
+    //-----------------------------------------------------------------
+    // S5：Gx、Gy（有符号 11bit，-1020 .. +1020）
+    //-----------------------------------------------------------------
+    reg signed [10:0] gx_s5, gy_s5;
+    reg               vsync_s5, de_s5;
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            gx_s5 <= 11'sd0; gy_s5 <= 11'sd0;
+            vsync_s5 <= 1'b0; de_s5 <= 1'b0;
+        end else begin
+            gx_s5 <= $signed({1'b0, c3_s4}) - $signed({1'b0, c1_s4});
+            gy_s5 <= $signed({1'b0, r3_s4}) - $signed({1'b0, r1_s4});
+            vsync_s5 <= vsync_s4; de_s5 <= de_s4;
+        end
+    end
+
+    //-----------------------------------------------------------------
+    // S6：取绝对值
+    //-----------------------------------------------------------------
+    function [10:0] abs11;
+        input signed [10:0] v;
+        begin
+            abs11 = v[10] ? (~v + 11'd1) : v;
+        end
+    endfunction
+
+    reg [10:0] ax_s6, ay_s6;
+    reg        vsync_s6, de_s6;
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            ax_s6 <= 11'd0; ay_s6 <= 11'd0;
+            vsync_s6 <= 1'b0; de_s6 <= 1'b0;
+        end else begin
+            ax_s6 <= abs11(gx_s5);
+            ay_s6 <= abs11(gy_s5);
+            vsync_s6 <= vsync_s5; de_s6 <= de_s5;
+        end
+    end
+
+    //-----------------------------------------------------------------
+    // S7：幅值 mag = |Gx| + |Gy|（0..2040，12bit）
+    //     ★ 方案 §3.4 已定：用精确 L1，不用 max + min/2 近似 —— NMS 靠幅值
+    //       比较定极大值，近似会引入比较误差；L1 在硬件上反而更省。
+    //-----------------------------------------------------------------
+    wire [11:0] mag = {1'b0, ax_s6} + {1'b0, ay_s6};
+
+    reg [11:0] mag_s7;
+    reg        vsync_s7, de_s7;
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            mag_s7   <= 12'd0;
+            vsync_s7 <= 1'b0;
+            de_s7    <= 1'b0;
+        end else begin
+            mag_s7   <= mag;
+            vsync_s7 <= vsync_s6;
+            de_s7    <= de_s6;
+        end
+    end
+
+    //-----------------------------------------------------------------
+    // S8：输出寄存
+    //   mag_o 饱和到 8bit（与 sobel 的视觉亮度一致）；edge_o = (mag_sat > thr_i)。
+    //   de 为 0 的区段两支输出都必须为 0（方案 §8 的仿真用例）。
+    //-----------------------------------------------------------------
+    wire [7:0] mag_sat = (mag_s7 > 12'd255) ? 8'hFF : mag_s7[7:0];
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            vsync_o <= 1'b0;
+            de_o    <= 1'b0;
+            mag_o   <= 8'd0;
+            edge_o  <= 1'b0;
+        end else begin
+            vsync_o <= vsync_s7;
+            de_o    <= de_s7;
+            mag_o   <= de_s7 ? mag_sat : 8'd0;
+            edge_o  <= de_s7 & (mag_sat > thr_i);
+        end
+    end
+
+endmodule
+
+
+//=====================================================================
+// canny_win3x3 —— canny_edge 内部辅助模块（不作为 I-B 对外接口）
+//---------------------------------------------------------------------
+// 把流式像素流（每拍 1 个，raster 顺序、de 有效）变成 3x3 邻域窗口 w11..w33。
+//
+// 【2 个行 bank 按行轮转】
+//   bank(sel)    = 上上行（正在被当前行就地改写）
+//   bank(sel^1)  = 上一行（只读）
+//   写地址 = col_cnt，读地址 = col_cnt+1（预测式）——读写恒不同址：
+//     · 写 bank 里的"上上行"在地址 x 被改写时，该地址的数据早在本拍之前就读走了
+//       （读地址始终比写地址大 1），不会读到被覆盖的值；
+//     · 行尾/消隐读地址回绕到 0，而写地址是 COL_LAST，仍然不同址。
+//   两拍后读出的数据正好落在"当前列"，于是行/列都天然对齐，不需要额外搬移。
+//   （pix_window_3x3 用 3 个 bank 是为了另有"当前行"要存；这里当前行直接来自
+//     输入流，2 个 bank 就够，省 2 块 EFX_RAM10。）
+//
+// 【延迟 2 拍】bank 同步读 1 拍 + 窗口寄存 1 拍，vsync_o/de_o 同深度对齐。
+//
+// 【窗口语义】与 pix_window_3x3 完全一致：窗口中心 = "与输出同拍进入的那一拍
+//   数据的上一行、左一列"。两级窗口串联时偏移量可以直接相加。
+//
+// 【边界】行首（读侧第一拍）整窗复制"行首那两行 + 当前行的同一列"，即左侧边缘
+//   复制、不补零；行尾那一拍读地址回绕，末列右邻取到的是第 0 列。这两种情况都
+//   落在最外 2 行 2 列，与 pix_window_3x3 的处理口径一致（见 INTERFACE.md §3）。
+//
+// 【前提】与 pix_window_3x3 相同：每行 de 拉低后至少 2 拍消隐（本设计 H 消隐
+//   370 拍，富余）。
+//=====================================================================
+module canny_win3x3 #(
+    parameter integer W     = 8,
+    parameter integer IMG_W = 1280
+)(
+    input  wire         clk,
+    input  wire         rst_n,
+
+    input  wire         vsync_i,
+    input  wire         de_i,
+    input  wire [W-1:0] din,
+
+    output wire         vsync_o,
+    output wire         de_o,
+
+    output reg  [W-1:0] w11, w12, w13,
+    output reg  [W-1:0] w21, w22, w23,
+    output reg  [W-1:0] w31, w32, w33
+);
+
+    localparam integer  AW       = (IMG_W <= 2) ? 1 : $clog2(IMG_W);
+    localparam [AW-1:0] COL_ZERO = {AW{1'b0}};
+    localparam [AW-1:0] COL_LAST = IMG_W - 1;
+
+    //-----------------------------------------------------------------
+    // 1) 帧首检测 + 握手延迟（2 拍，与数据同延迟）
+    //-----------------------------------------------------------------
+    reg       vsync_d, de_d;
+    reg [1:0] vsync_sr, de_sr;
+
+    wire vsync_start  = vsync_i && !vsync_d;    // 帧首单拍
+    wire de_r         = de_sr[0];               // 读侧使能（比 de_i 晚 1 拍）
+    wire line_start_r = de_sr[0] && !de_sr[1];  // 读侧行首
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            vsync_d  <= 1'b0;
+            de_d     <= 1'b0;
+            vsync_sr <= 2'b00;
+            de_sr    <= 2'b00;
+        end else begin
+            vsync_d  <= vsync_i;
+            de_d     <= de_i;
+            vsync_sr <= {vsync_sr[0], vsync_i};
+            de_sr    <= {de_sr[0],    de_i};
+        end
+    end
+
+    assign vsync_o = vsync_sr[1];
+    assign de_o    = de_sr[1];
+
+    //-----------------------------------------------------------------
+    // 2) 列计数：de 期间 0..IMG_W-1，消隐期归零（写地址用它）
+    //-----------------------------------------------------------------
+    reg [AW-1:0] col_cnt;
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n)
+            col_cnt <= COL_ZERO;
+        else if (!de_i)
+            col_cnt <= COL_ZERO;                // 消隐期归零 -> 行首读地址为 0
+        else if (col_cnt == COL_LAST)
+            col_cnt <= COL_ZERO;
+        else
+            col_cnt <= col_cnt + 1'b1;
+    end
+
+    //-----------------------------------------------------------------
+    // 3) bank 轮转：行尾翻页，帧首归零
+    //-----------------------------------------------------------------
+    reg bank_sel;                               // 1 = bank1 是"上上行"（写 bank）
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n)
+            bank_sel <= 1'b0;
+        else if (vsync_start)
+            bank_sel <= 1'b0;
+        else if (de_d && !de_i)                 // 行尾翻页
+            bank_sel <= ~bank_sel;
+    end
+
+    //-----------------------------------------------------------------
+    // 4) 预测式读地址：提前一拍发 col+1
+    //    当拍发 col+1，下一拍读出的正是"下一拍那一列"的历史行数据，于是
+    //    rd_prev1/rd_prev2 与当拍 din 落在同一列，三行对齐、零错位。
+    //    行尾与消隐期发 0：既避开 col+1 越界，又让每行第一拍读到第 0 列。
+    //-----------------------------------------------------------------
+    wire [AW-1:0] rd_addr = (!de_i || col_cnt == COL_LAST) ? COL_ZERO
+                                                          : (col_cnt + 1'b1);
+
+    //-----------------------------------------------------------------
+    // 5) 2 个行 bank（单时钟、1 读 1 写，标准 SDP 推断写法；不做复位）
+    //-----------------------------------------------------------------
+    reg [W-1:0] bank0 [0:IMG_W-1];
+    reg [W-1:0] bank1 [0:IMG_W-1];
+
+    reg [W-1:0] q0, q1;
+
+    always @(posedge clk) begin
+        if (de_i && bank_sel == 1'b0) bank0[col_cnt] <= din;
+        q0 <= bank0[rd_addr];
+    end
+
+    always @(posedge clk) begin
+        if (de_i && bank_sel == 1'b1) bank1[col_cnt] <= din;
+        q1 <= bank1[rd_addr];
+    end
+
+    // bank_sel = 0 时：bank0 = 上上行，bank1 = 上一行；bank_sel = 1 时互换。
+    wire [W-1:0] rd_prev1 = bank_sel ? q0 : q1;   // 上一行，当前列
+    wire [W-1:0] rd_prev2 = bank_sel ? q1 : q0;   // 上上行，当前列
+
+    //-----------------------------------------------------------------
+    // 6) 窗口寄存器（读侧）
+    //    rowN_d1 / rowN_d2 是各行"当前列"的 1/2 拍历史，正好是左邻、左二邻。
+    //    窗口中心 = 上一行、左一列：w2x 取上一行，w1x 取上上行，w3x 取当前行。
+    //-----------------------------------------------------------------
+    reg [W-1:0] row1_d1, row1_d2;     // 上上行的 1/2 拍历史
+    reg [W-1:0] row2_d1, row2_d2;     // 上一行的 1/2 拍历史
+    reg [W-1:0] row3_d1, row3_d2;     // 当前行的 1/2 拍历史
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            row1_d1 <= {W{1'b0}}; row1_d2 <= {W{1'b0}};
+            row2_d1 <= {W{1'b0}}; row2_d2 <= {W{1'b0}};
+            row3_d1 <= {W{1'b0}}; row3_d2 <= {W{1'b0}};
+
+            w11 <= {W{1'b0}}; w12 <= {W{1'b0}}; w13 <= {W{1'b0}};
+            w21 <= {W{1'b0}}; w22 <= {W{1'b0}}; w23 <= {W{1'b0}};
+            w31 <= {W{1'b0}}; w32 <= {W{1'b0}}; w33 <= {W{1'b0}};
+        end else if (vsync_start) begin
+            // 帧首清历史，避免首帧前几拍读到未定义的残值
+            row1_d1 <= {W{1'b0}}; row1_d2 <= {W{1'b0}};
+            row2_d1 <= {W{1'b0}}; row2_d2 <= {W{1'b0}};
+            row3_d1 <= {W{1'b0}}; row3_d2 <= {W{1'b0}};
+        end else if (de_r) begin
+            if (line_start_r) begin
+                // 行首：左邻缺失，整窗复制"当前列"（左边缘复制、不补零）
+                w11 <= rd_prev2; w12 <= rd_prev2; w13 <= rd_prev2;
+                w21 <= rd_prev1; w22 <= rd_prev1; w23 <= rd_prev1;
+                w31 <= din;      w32 <= din;      w33 <= din;
+
+                row1_d1 <= rd_prev2; row1_d2 <= rd_prev2;
+                row2_d1 <= rd_prev1; row2_d2 <= rd_prev1;
+                row3_d1 <= din;      row3_d2 <= din;
+            end else begin
+                w11 <= row1_d2; w12 <= row1_d1; w13 <= rd_prev2;
+                w21 <= row2_d2; w22 <= row2_d1; w23 <= rd_prev1;
+                w31 <= row3_d2; w32 <= row3_d1; w33 <= din;
+
+                row1_d2 <= row1_d1; row1_d1 <= rd_prev2;
+                row2_d2 <= row2_d1; row2_d1 <= rd_prev1;
+                row3_d2 <= row3_d1; row3_d1 <= din;
+            end
+        end
+    end
+
+endmodule

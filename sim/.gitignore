@@ -1,0 +1,4 @@
+# Verilator 构建产物与临时文件（可完全重建，不提交）
+build/
+__pycache__/
+*.pyc
