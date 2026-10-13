@@ -1,6 +1,6 @@
 `timescale 1ns/1ps
 //=====================================================================
-// canny_edge 验证台（当前对应 M2：高斯 + 梯度 + 幅值 + 方向量化 + NMS）
+// canny_edge 验证台（当前对应 M3：全套 高斯→梯度→幅值→方向→NMS→双阈值滞后）
 //---------------------------------------------------------------------
 // 结构与真实链路一致：pix_window_3x3 → canny_edge，输入是灰度流。
 // 激励图像由 sim/canny_ref.py 生成（同一套近似的 Python 参考模型），
@@ -23,7 +23,7 @@ module tb_canny_edge;
     // 延迟常量：改 RTL 时这里要跟着改（有意写死，避免"改了 RTL 测试台自动跟随"
     // 而失去延迟回归的意义）
     localparam WIN_LAT   = 2;                  // pix_window_3x3 冻结延迟
-    localparam CANNY_LAT = 12;                 // canny_edge M2 延迟
+    localparam CANNY_LAT = 12;                 // canny_edge M3 延迟（M2/M3 同为 12）
     localparam EXP_LAT   = WIN_LAT + CANNY_LAT;
 
     localparam H_BLANK   = 6;                  // 行消隐（>= 2 拍的前提要求）
@@ -34,7 +34,10 @@ module tb_canny_edge;
     localparam FRAME     = ACT_END + VS_TAIL + 2;
     localparam CAP_FRAME = 2;                  // 抓第 3 帧（行缓存已填满）
 
-    localparam THR = 40;                       // 与 example_top 默认值一致
+    // 阈值域是内部 mag8 = mag>>3（方案 §3.8）：40 对应真实 |Gx|+|Gy| = 320。
+    // ★ 与 sobel_edge 的 thr_i（先饱和到 255 再比）不可混用。
+    localparam THR_HIGH = 40;                  // 强边阈值
+    localparam THR_LOW  = 20;                  // 弱边阈值（>= 它的才有资格被连接）
 
     //------------------------------------------------------------------
     // 时钟 / 复位
@@ -127,7 +130,8 @@ module tb_canny_edge;
         .p11 (p11), .p12 (p12), .p13 (p13),
         .p21 (p21), .p22 (p22), .p23 (p23),
         .p31 (p31), .p32 (p32), .p33 (p33),
-        .thr_i   (THR[7:0]),
+        .thr_high_i (THR_HIGH[7:0]),
+        .thr_low_i  (THR_LOW[7:0]),
         .vsync_o (canny_vs),
         .de_o    (canny_de),
         .mag_o   (canny_mag),

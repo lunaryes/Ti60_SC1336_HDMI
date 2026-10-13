@@ -4,15 +4,16 @@
 //---------------------------------------------------------------------
 // 硬件近似版 Canny 边缘检测（方案见 docs/CANNY_PLAN.md）。
 //
-// 【当前版本：M2 —— 高斯 + 梯度 + 幅值 + 方向量化 + NMS】
-//   在 M1（§3.2 高斯 / §3.3 Sobel / §3.4 幅值）之上补完 §3.5 方向量化、
-//   §3.6 梯度行缓存、§3.7 非极大值抑制。edge_o 已经是细化过的边缘（斜方向实测
-//   最大 1 个像素宽；横/竖方向因方案 §11 决议 2 的"平局保留"最多相邻 2 个像素，
-//   与参考模型逐点一致），仍是单阈值（thr_i）版本。
-//   端口与 sobel_edge 完全对齐（p11..p33 / thr_i / mag_o / edge_o），可就地
-//   替换实例；mag_o 仍是未做 NMS 的梯度幅值（与 sobel 的视觉亮度可直接对比），
-//   细化只体现在 edge_o 上。
-//   双阈值 + 滞后 → M3；接入顶层 → M4。
+// 【当前版本：M3 —— 全套：高斯 + 梯度 + 幅值 + 方向量化 + NMS + 双阈值滞后】
+//   在 M2 之上补完 §3.7/§3.8 的双阈值 + 单遍滞后。算法到此完整，只差接顶层。
+//   edge_o 的宽度：斜 45°/135° 实测最大 1 个像素，横/竖因方案 §11 决议 2 的
+//   "平局保留"最多相邻 2 个像素，均与参考模型逐点一致。
+//   端口与 sobel_edge 的差别只有阈值口：sobel 是单个 thr_i，这里是 thr_high_i /
+//   thr_low_i 两个（§3.8 的 mag8 域，**与 sobel 的 thr_i 不可混用**）；p11..p33 /
+//   mag_o / edge_o 语义不变，可就地替换实例。
+//   mag_o 仍是未做 NMS、未过阈值的梯度幅值（饱和 8bit，与 sobel 的视觉亮度可直接
+//   对比），细化与阈值都只体现在 edge_o 上。
+//   接入顶层（image_pipeline_top，含 ORIG_LAT/LATENCY 改造）→ M4。
 //
 // 【与 sobel_edge 的差异】
 //   1) 多一级 3x3 高斯 [1 2 1; 2 4 2; 1 2 1]/16（S1），移位加法实现、不占 DSP；
@@ -20,16 +21,18 @@
 //      灰度窗，没有这一级。方案 §3.1 原以为"全流程只需 2 个行缓存"，那是漏算
 //      了高斯场自身的行历史：高斯把 3 行压成 1 行后，Sobel 还要它上下各一行，
 //      必须自己存。实测 2 个 1280x8 bank（4 块 EFX_RAM10），见 §6 的偏差说明。
-//   3) mag / edge 语义与 sobel 保持一致：mag 饱和到 8bit，edge = (mag_sat > thr_i)，
-//      所以 M1 阶段 thr_i 与 sobel 的 thr_i 可以直接同值对比。
-//      ★ M3 引入双阈值后判据改成内部 mag8 = mag>>3 域（方案 §3.8），届时这里和
-//        docs/INTERFACE.md 要同步改成"与 sobel 的 thr_i 不可混用"。
+//   3) edge 语义：sobel 是 (饱和幅值 > thr)；这里是 NMS + 双阈值滞后，判据在
+//      mag8 = mag>>3 的未饱和域。mag_o 的口径两者一致（都是饱和 8bit）。
 //
 // 【公式】
 //   g   = (p11 + 2p12 + p13 + 2p21 + 4p22 + 2p23 + p31 + 2p32 + p33) >> 4  // 0..255
 //   Gx  = (g13 + 2g23 + g33) - (g11 + 2g21 + g31)   右列 - 左列，-1020..+1020
 //   Gy  = (g31 + 2g32 + g33) - (g11 + 2g12 + g13)   下行 - 上行，-1020..+1020
 //   mag = |Gx| + |Gy|                               0..2040，L1 精确值
+//   mag8 = mag >> 3                                 0..255，内部判据域（§3.8）
+//   strong = NMS 过 && mag8 >= thr_high_i
+//   weak   = NMS 过 && mag8 >= thr_low_i
+//   edge   = strong || (weak && 8 邻域内含 strong)  ← 单遍滞后（§3.7，非递归）
 //   系数 2 全部用左移一位（位拼接）实现，无乘法器、不占 DSP。
 //
 // 【流水线】LATENCY = 12 拍，vsync/de 用同深度移位寄存器对齐，
@@ -44,7 +47,7 @@
 //     S8  方向量化         1   → 14bit 梯度字 {mag[11:0], dir[1:0]}
 //     S9  梯度场同步读     1   ← canny_win3x3 #2（14bit）
 //     S10 梯度场窗口       1
-//     S11 NMS              1
+//     S11 NMS + 双阈值滞后 1   （复用同一个 3x3 梯度窗，不额外加行缓存）
 //     S12 输出寄存         1
 //   （sobel_edge 只有 4 拍：替换实例后 image_pipeline_top 的 ORIG_LAT 要跟着
 //     改，见方案 §5，M4 一并处理。）
@@ -62,10 +65,17 @@
 //   ★ 抓取口径：必须"从本帧第一个输出行的行首"起抓，不能直接用帧计数器圈一段
 //     抓——上一帧最后一行的输出还有 1 拍落在本帧开头（流水线尾巴），会让整个
 //     数组错 1 个像素（看着像每行右移 1 列）。tb_canny_edge.v 已按行首起抓。
-//   ★ 边界口径（比对时留边，与 pix_window_3x3 一致）：输出左侧 0..3 列受"行首
-//     整窗复制晚 1 拍"影响，第 63 列是行尾回绕读到的第 0 列；帧首第 3、4 行是
-//     行缓存还没填满的暂态——mag 从第 5 行起干净，edge 因为 NMS 还要看一圈
-//     邻居，要第 6 行起才干净。
+//   ★ 边界口径（比对时留边，与 pix_window_3x3 一致）：
+//     · 左侧 0..3 列受"行首整窗复制晚 1 拍"影响；帧首第 3、4 行是行缓存还没填满
+//       的暂态——mag 从第 5 行起干净，edge 因为 NMS 还要看一圈邻居，要第 6 行起
+//       才干净。比对时 mag 留边 5、edge 留边 6（见 sim/canny_ref.py 的 margin）。
+//     · 右侧末两列：实测（均匀场 128）末列的抽头 p33 读到的是**消隐期的 0**，
+//       不是本行最后一个像素——3x3 窗的最后一次更新发生在输入已经转消隐的那一
+//       拍（喂数据的一级在 de=0 时发 0），于是均匀场在末两列留下 mag = 32 / 16 的
+//       小台阶（内部 mag8 = 2..4，远低于 thr_low，所以不产生任何 edge_o）。
+//       这不是 M3 引入的：同一个图样单独喂 pix_window_3x3，末列 p33 同样是 0，
+//       现有的 sobel 链路同样吃这一拍。要让末列彻底干净，应由喂数据的那一级在
+//       消隐期保持最后一个像素而不是发 0（流水线级改动），留到 M4 一并决定。
 //   ★ docs/INTERFACE.md 里"整体右下偏移 1 行 1 列"的列方向与实测不符（实为
 //     1 行 0 列），M4 更新文档时一并订正。
 //   ★ 3 行下移已经超出 FrameBoundCrop 的 SKIP_ROWS = 2：帧首/帧尾因行历史被
@@ -87,7 +97,8 @@ module canny_edge #(
     input  wire [7:0]  p11, p12, p13,
     input  wire [7:0]  p21, p22, p23,
     input  wire [7:0]  p31, p32, p33,
-    input  wire [7:0]  thr_i,
+    input  wire [7:0]  thr_high_i,
+    input  wire [7:0]  thr_low_i,
 
     output reg         vsync_o,
     output reg         de_o,
@@ -324,10 +335,18 @@ module canny_edge #(
     );
 
     //-----------------------------------------------------------------
-    // S11：非极大值抑制（方案 §3.7）
-    //   中心像素按自己的方向扇区取两个邻居比幅值；用 >= 保留平局
+    // S11：非极大值抑制（方案 §3.7）+ 双阈值滞后（方案 §3.7/§3.8）
+    //   NMS：中心像素按自己的方向扇区取两个邻居比幅值；用 >= 保留平局
     //   （方案 §11 决议 2：不丢数据，宁可留粗一点也不把单像素线打断）。
     //   比较用**未饱和的 12bit 幅值**，不用 8bit 饱和值。
+    //   滞后：strong = NMS 过且 mag8 >= thr_high；weak = NMS 过且 mag8 >= thr_low；
+    //        edge = strong || (weak && 8 邻域内有 strong)。
+    //   ★ 阈值域：mag8 = mag >> 3（0..2040 → 0..255，单调、无饱和平台），
+    //     与 sobel_edge 的 thr_i（先饱和到 255 再比）**不可混用**。
+    //   ★ 简化点（方案 §3.7 明示）：邻域的 strong 只看**未过 NMS 的原始幅值**，
+    //     不是"邻居也过了 NMS"——单遍传播，不是连通域递归；用同一个 3x3 梯度
+    //     窗，不额外加行缓存。
+    //   ★ thr_low 配成大于 thr_high 时 weak ⊆ strong，退化成单阈值，不会出错。
     //-----------------------------------------------------------------
     wire [11:0] mag_c = m22[13:2];       // 中心幅值
     wire [1:0]  dir_c = m22[1:0];        // 中心方向
@@ -345,19 +364,41 @@ module canny_edge #(
 
     wire nms_keep = (mag_c >= nb1) && (mag_c >= nb2);
 
+    // mag8：内部判据域（未饱和）。14bit 梯度字是 {mag[11:0], dir[1:0]}，
+    // 所以 mag8 = mag >> 3 = w[13:5]（写成函数，免得两处取错比特位）。
+    function [7:0] mag8_of;
+        input [13:0] w;
+        begin
+            mag8_of = w[13:5];
+        end
+    endfunction
+
+    wire [7:0] mag8_c = mag8_of(m22);
+
+    wire strong_c = nms_keep && (mag8_c >= thr_high_i);
+    wire weak_c   = nms_keep && (mag8_c >= thr_low_i);
+
+    // 8 邻域"有强边"：邻居也各自 >>3，只看原始幅值（不看它有没有过 NMS）
+    wire nb_strong = (mag8_of(m11) >= thr_high_i) || (mag8_of(m12) >= thr_high_i) ||
+                     (mag8_of(m13) >= thr_high_i) || (mag8_of(m21) >= thr_high_i) ||
+                     (mag8_of(m23) >= thr_high_i) || (mag8_of(m31) >= thr_high_i) ||
+                     (mag8_of(m32) >= thr_high_i) || (mag8_of(m33) >= thr_high_i);
+
+    wire edge_c = strong_c || (weak_c && nb_strong);
+
     reg [11:0] mag_s11;
-    reg        nms_s11;
+    reg        edge_s11;
     reg        vsync_s11, de_s11;
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             mag_s11   <= 12'd0;
-            nms_s11   <= 1'b0;
+            edge_s11  <= 1'b0;
             vsync_s11 <= 1'b0;
             de_s11    <= 1'b0;
         end else begin
             mag_s11   <= mag_c;
-            nms_s11   <= nms_keep;
+            edge_s11  <= edge_c;
             vsync_s11 <= mwin_vs;
             de_s11    <= mwin_de;
         end
@@ -366,7 +407,7 @@ module canny_edge #(
     //-----------------------------------------------------------------
     // S12：输出寄存
     //   mag_o 饱和到 8bit（与 sobel 的视觉亮度一致，取窗口中心那一像素）；
-    //   edge_o = 通过 NMS 且 mag_sat > thr_i。
+    //   edge_o = S11 算好的滞后结果，按 de 掩掉消隐期。
     //   de 为 0 的区段两支输出都必须为 0（方案 §8 的仿真用例）。
     //   ★ mag_o 取窗口中心的幅值，与 edge_o 严格指向同一像素；这样板上 mag 图
     //     和 edge 图不会错位（代价是相对 M1 又多下移 1 行，见文件头空间对齐）。
@@ -383,7 +424,7 @@ module canny_edge #(
             vsync_o <= vsync_s11;
             de_o    <= de_s11;
             mag_o   <= de_s11 ? mag_sat : 8'd0;
-            edge_o  <= de_s11 & nms_s11 & (mag_sat > thr_i);
+            edge_o  <= de_s11 & edge_s11;
         end
     end
 

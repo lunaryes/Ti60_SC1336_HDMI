@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-canny_edge 参考模型 + 回归驱动（当前对应 M2：高斯 + 梯度 + 幅值 + 方向量化 + NMS）
+canny_edge 参考模型 + 回归驱动（当前对应 M3：完整算法 = … + 双阈值 + 单遍滞后）
 
 参考模型刻意用**与 RTL 完全相同的近似**（方案 §8.1 的要求），否则比对必然不一致：
     g   = (p11 + 2p12 + p13 + 2p21 + 4p22 + 2p23 + p31 + 2p32 + p33) >> 4
@@ -12,8 +12,11 @@ canny_edge 参考模型 + 回归驱动（当前对应 M2：高斯 + 梯度 + 幅
           |Gx|*106 <  |Gy|*256            → 1（90°，梯度近竖直）
           否则 Gx、Gy 同号 → 2（45°）／异号 → 3（135°）
     NMS = mag 中心 >= 沿 dir 的两个邻居（平局保留）
-    edge = NMS 通过 且 饱和幅值 > thr
-不做双阈值滞后——那是 M3 的事。
+    mag8  = mag >> 3                            （阈值域，0..255 单调无饱和）
+    strong = NMS 通过 且 mag8 >= thr_high
+    weak   = NMS 通过 且 mag8 >= thr_low
+    edge   = strong || (weak && 8 邻域内存在 strong)
+             ★ 邻域的 strong 只看未过 NMS 的原始幅值（方案 §3.7 的单遍近似）
 
 比对方式：参考模型给出"中心落在 (r,c) 的理想值"，RTL 输出与它之间只差一个固定的
 整体偏移 (EXP_DR, EXP_DC)（流水线固有的行列偏移，写成常量）。比对区留 5~6 圈边，
@@ -33,7 +36,10 @@ import re
 import subprocess
 import sys
 
-THR = 40        # 与 tb_canny_edge.v / example_top 的默认阈值一致
+# 阈值域是内部 mag8 = mag>>3（方案 §3.8），与 tb_canny_edge.v 一致。
+# ★ 与 sobel_edge 的 thr_i（先饱和到 255 再比）不可混用。
+THR_HIGH = 40   # 强边阈值（mag8 域，等价真实 |Gx|+|Gy| = 320）
+THR_LOW = 20    # 弱边阈值（>= 它的才可能被滞后连接）
 
 # M2 流水线的固有空间偏移：RTL 输出 (r,c) 上的像素 = 理想参考 (r+DR, c+DC)。
 # 由窗口链推出：pix_window_3x3 的中心偏 (-1,0) → canny 内的高斯窗口再 (-1,0)
@@ -115,12 +121,37 @@ def ref_nms(mags, dirs, W, H):
     return keep
 
 
-def ref_edge(img, W, H, thr):
-    """理想 M2 边缘图：通过 NMS 且 饱和幅值 > thr"""
+def ref_edge(img, W, H, thr_high, thr_low):
+    """理想 M3 边缘图：NMS + 双阈值单遍滞后（与 RTL 同一套近似）
+
+    strong = NMS 过 && mag8 >= thr_high
+    weak   = NMS 过 && mag8 >= thr_low
+    edge   = strong || (weak && 8 邻域内含 strong)
+    ★ 邻域的 strong 只看**未过 NMS 的原始 mag8**（方案 §3.7 的简化），RTL 同样。
+    """
     mags, dirs = ref_grad(img, W, H)
     keep = ref_nms(mags, dirs, W, H)
-    return [[1 if (keep[r][c] and min(mags[r][c], 255) > thr) else 0
-             for c in range(W)] for r in range(H)]
+    mag8 = [[m >> 3 for m in row] for row in mags]
+
+    def nb_strong(r, c):
+        for dr in (-1, 0, 1):
+            for dc in (-1, 0, 1):
+                if dr == 0 and dc == 0:
+                    continue
+                if mag8[clamp(r + dr, 0, H - 1)][clamp(c + dc, 0, W - 1)] >= thr_high:
+                    return True
+        return False
+
+    out = [[0] * W for _ in range(H)]
+    for r in range(H):
+        for c in range(W):
+            if not keep[r][c]:
+                continue
+            if mag8[r][c] >= thr_high:
+                out[r][c] = 1
+            elif mag8[r][c] >= thr_low and nb_strong(r, c):
+                out[r][c] = 1
+    return out
 
 
 def sobel_mag(img, W, H):
@@ -188,6 +219,28 @@ def pat_noise(W, H, seed=12345):
 
 def pat_checker(W, H, cell=4):
     return [[255 if ((r // cell) + (c // cell)) % 2 else 0 for c in range(W)] for r in range(H)]
+
+
+def pat_faint(W, H, link, amp=64, bg=60):
+    """强弱边混合（方案 §8 用例 5）：竖边界上半段是强边（幅值 160 → mag8=60），
+    下半段是弱边（幅值 64 → mag8=24，落在 [thr_low, thr_high) 里）。
+
+    amp=64 是算出来的：竖阶跃经高斯后 Gx 峰值 = 3*amp，mag8 = 3*amp/8 = 24；
+    取 64 让它稳稳落在 [20,40) 中间，不受边界四舍五入影响。
+
+    link=True  → 弱边顶端紧挨强边底端，滞后应当把整条弱边连上；
+    link=False → 没有强边，弱边孤立，滞后应当把它整条丢掉。
+    """
+    img = [[bg] * W for _ in range(H)]
+    for r in range(H):
+        for c in range(W):
+            if c < W // 2:
+                continue
+            if r < H // 2:
+                img[r][c] = 220 if link else bg          # 上半段：强边（或不放）
+            else:
+                img[r][c] = bg + amp                     # 下半段：弱边
+    return img
 
 
 def pat_step(W, H, orient):
@@ -259,6 +312,8 @@ PATTERNS = {
     "step_h":   lambda W, H: pat_step(W, H, "h"),
     "step_45":  lambda W, H: pat_step(W, H, "45"),
     "step_135": lambda W, H: pat_step(W, H, "135"),
+    "faint_link": lambda W, H: pat_faint(W, H, True),    # 弱边接在强边上 → 应连上
+    "faint_iso":  lambda W, H: pat_faint(W, H, False),   # 弱边孤立 → 应丢掉
 }
 
 
@@ -401,9 +456,10 @@ def main():
 
         # edge 的比对区再收一圈（margin=6）：edge 是 NMS 判决，要看中心像素的
         # 邻居；第 5 行的邻居还是帧首暂态算出来的值，判决可以不一样。
-        edge_ref = ref_edge(img, W, H, THR)
+        edge_ref = ref_edge(img, W, H, THR_HIGH, THR_LOW)
         eerr, en, ebad = verify_offset(dut_edge, edge_ref, W, H, dr, dc, margin=6)
-        print("  edge 比对 %d 点，失配 %d 点（参考 = NMS + mag_sat > %d）" % (en, eerr, THR))
+        print("  edge 比对 %d 点，失配 %d 点（参考 = NMS + 双阈值滞后，thr %d/%d）"
+              % (en, eerr, THR_HIGH, THR_LOW))
 
         if err != 0 or eerr != 0:
             fails += 1
@@ -421,16 +477,66 @@ def main():
         else:
             print("  OK")
 
-        # 细化率：过阈值像素 → 通过 NMS 的像素（都在同一片有效区内统计）
-        over = keep = 0
+        # 阈值/滞后统计（同一片有效区内）：强边 → 最终 edge（其中弱边被连上的部分）
+        ref_mags, _ = ref_grad(img, W, H)
+        strong_n = edge_n = weak_on = 0
         for r in range(4, H - 4):
             for c in range(4, W - 4):
-                if ref[r][c] > THR:
-                    over += 1
+                if (ref_mags[r][c] >> 3) >= THR_HIGH:
+                    strong_n += 1
                 if edge_ref[r][c]:
-                    keep += 1
-        print("  NMS 细化：过阈值 %d → 保留 %d（%s）"
-              % (over, keep, "%.0f%%" % (100.0 * keep / over) if over else "n/a"))
+                    edge_n += 1
+                    if (ref_mags[r][c] >> 3) < THR_HIGH:
+                        weak_on += 1
+        print("  阈值统计：mag8 >= %d 的像素 %d → 最终 edge %d 点（其中滞后连上的弱边 %d 点）"
+              % (THR_HIGH, strong_n, edge_n, weak_on))
+
+        # 边界自检（方案 §8 用例 6）：均匀场不该有任何响应。这里不跟参考模型比，
+        # 直接查 DUT 自己，正好覆盖比对区留边没覆盖到的列。
+        # 口径按 RTL 头注释实测的"边界口径"分档：
+        #   · 内部（留边 4 列 / 右边 2 列之外）：mag 与 edge 必须**全 0**；
+        #   · 整个宽度上 edge 必须全 0（边界小台阶都在 thr_low 以下）；
+        #   · 右侧末两列允许已知小台阶（末列 p33 读到消隐期的 0，mag8 = 2..4），
+        #     逐列打印出来，数值一变就能从日志里看出来。
+        if name == "uniform":
+            nz_in = nz_edge = 0
+            border = {}
+            for r in range(6, H):
+                for c in range(W):
+                    if dut_edge[r][c]:
+                        nz_edge += 1
+                    if dut_mag[r][c] != 0:
+                        if c < 4 or c >= W - 2:
+                            border.setdefault(c, []).append(dut_mag[r][c])
+                        else:
+                            nz_in += 1
+            print("  边界自检（均匀场，第 6 行起）：内部（第 4..%d 列）mag!=0 的点 %d；"
+                  "整幅 edge %d 点" % (W - 3, nz_in, nz_edge))
+            for c in sorted(border):
+                vals = sorted(set(border[c]))
+                print("    边界区第 %2d 列：%d 个点非零，取值 %s"
+                      % (c, len(border[c]), vals))
+            if nz_in or nz_edge:
+                fails += 1
+                print("  !! FAIL: 均匀场在内部/edge 上出现了响应")
+
+        # 滞后行为自检：弱边接在强边上应被连上；孤立弱边应被整条丢掉
+        if name.startswith("faint"):
+            want_on = name == "faint_link"
+            dut_weak = 0
+            for r in range(6, H - 6):
+                for c in range(6, W - 6):
+                    rr, cc = r + dr, c + dc
+                    if not (2 <= rr <= H - 3 and 2 <= cc <= W - 3):
+                        continue
+                    if dut_edge[r][c] and (ref_mags[rr][cc] >> 3) < THR_HIGH:
+                        dut_weak += 1
+            print("  滞后行为（%s）：DUT 最终 edge 里的弱边像素 %d 个（期望%s %s）"
+                  % ("弱边接在强边上" if want_on else "孤立弱边", dut_weak,
+                     "> 0" if want_on else "==", "0" if not want_on else ""))
+            if (dut_weak > 0) != want_on:
+                fails += 1
+                print("  !! FAIL: 滞后没有按预期%s弱边" % ("连接" if want_on else "丢弃"))
 
         # 单像素宽度：阶跃图样沿垂直方向扫描，量边缘像素的连续段长度
         if name.startswith("step"):
@@ -444,14 +550,16 @@ def main():
                 fails += 1
                 print("  !! FAIL: NMS 细化不如参考模型")
 
-        # 统计：与"不做高斯的 sobel"对比
+        # 统计：与"不做高斯的 sobel"对比。这一行比的是**饱和 8bit 显示域**
+        # （mag_o 的口径），跟 mag8 阈值域无关，只是看高斯有没有把细节抹过头。
         sob = sobel_mag(img, W, H)
         cmax = max(max(row) for row in ref)
         smax = max(max(row) for row in sob)
-        cover = sum(1 for r in range(H) for c in range(W) if ref[r][c] > THR)
-        scover = sum(1 for r in range(H) for c in range(W) if sob[r][c] > THR)
-        print("  mag 峰值：canny %d / sobel %d；过阈值像素：canny %d / sobel %d"
-              % (cmax, smax, cover, scover))
+        sat_cmp = 40
+        cover = sum(1 for r in range(H) for c in range(W) if ref[r][c] > sat_cmp)
+        scover = sum(1 for r in range(H) for c in range(W) if sob[r][c] > sat_cmp)
+        print("  mag 峰值：canny %d / sobel %d；饱和幅值 > %d 的像素：canny %d / sobel %d"
+              % (cmax, smax, sat_cmp, cover, scover))
 
     print()
     print("总计：%d 个图样，失败 %d 个" % (len(names), fails))
