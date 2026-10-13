@@ -1106,17 +1106,18 @@ assign w_rgb_g = w_rgb_pre_g;
 assign w_rgb_b = w_rgb_b_mult[17:16] ? 8'hFF : w_rgb_b_mult[15: 8]; 
 
 // =========================================================================================================================================
-// Image pipeline : rgb_to_gray -> pix_window_3x3 -> sobel_edge -> image_mix
+// Image pipeline : rgb_to_gray -> pix_window_3x3 -> canny_edge -> image_mix
 // 插入点：AWB 之后、FrameBoundCrop 之前（docs/ARCH.md §1），全部在 clk_pixel 单域
 // =========================================================================================================================================
 localparam IMG_MODE = 2'd3;      // 0=原图 1=边缘图 2=分屏(左原图+右边缘) 3=画中画(暂等同分屏)
-localparam IMG_THR  = 8'd40;     // Sobel 阈值：edge = mag > thr
+localparam IMG_THR  = 8'd40;     // Canny 强边阈值（内部 mag8 = mag>>3 域，弱边阈值 = 该值/2）
+localparam IMG_LAT  = 16;        // = image_pipeline_top 的 LATENCY，两处必须一致
 
 wire                                    pipe_vs                    ;
 wire                                    pipe_de                    ;
 wire                   [  23:0]         pipe_rgb                   ;
 
-image_pipeline_top #(.IMG_W(1280),.IMG_H(720)) u_image_pipeline(
+image_pipeline_top #(.IMG_W(1280),.IMG_H(720),.LATENCY(IMG_LAT)) u_image_pipeline(
     .clk_i                             (clk_pixel                 ),
     .rst_ni                            (rstn_pixel                ),
 
@@ -1131,14 +1132,15 @@ image_pipeline_top #(.IMG_W(1280),.IMG_H(720)) u_image_pipeline(
     .rgb_o                             (pipe_rgb                  )
 );
 
-// hsync 要比 de 早 8 个像素才与流水线后的数据同拍（= image_pipeline_top 的 LATENCY），
-// 否则 rgb2dvi 送出的 HS 与 DE 错位，HDMI 画面横移。
-reg [7:0] r_hs_dly = 8'd0;
+// hsync 要比 de 早 IMG_LAT 个像素才与流水线后的数据同拍（= image_pipeline_top 的
+// LATENCY），否则 rgb2dvi 送出的 HS 与 DE 错位，HDMI 画面横移。
+// 深度用 IMG_LAT 参数化：改流水线延迟时只改上面那个 localparam，别只改一边。
+reg [IMG_LAT-1:0] r_hs_dly = {IMG_LAT{1'b0}};
 always @(posedge clk_pixel or negedge rstn_pixel) begin
-    if (!rstn_pixel) r_hs_dly <= 8'd0;
-    else             r_hs_dly <= {r_hs_dly[6:0], w_rgb_hsync};
+    if (!rstn_pixel) r_hs_dly <= {IMG_LAT{1'b0}};
+    else             r_hs_dly <= {r_hs_dly[IMG_LAT-2:0], w_rgb_hsync};
 end
-wire                                    pipe_hs  = r_hs_dly[7]     ;
+wire                                    pipe_hs  = r_hs_dly[IMG_LAT-1];
 
 wire                                    boundcrop_vs               ;
 wire                                    boundcrop_hs               ;

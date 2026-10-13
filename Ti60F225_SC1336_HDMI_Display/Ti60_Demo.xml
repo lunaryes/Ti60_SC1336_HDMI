@@ -38,6 +38,7 @@
         <efx:design_file name="src/image/rgb_to_gray.v" version="default" library="default"/>
         <efx:design_file name="src/image/pix_window_3x3.v" version="default" library="default"/>
         <efx:design_file name="src/image/sobel.v" version="default" library="default"/>
+        <efx:design_file name="src/image/canny_edge.v" version="default" library="default"/>
         <efx:design_file name="src/image/image_pipeline_top.v" version="default" library="default"/>
         <efx:design_file name="src/display/image_mix.v" version="default" library="default"/>
         <efx:top_vhdl_arch name=""/>

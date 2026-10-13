@@ -365,11 +365,14 @@ module canny_edge #(
     wire nms_keep = (mag_c >= nb1) && (mag_c >= nb2);
 
     // mag8：内部判据域（未饱和）。14bit 梯度字是 {mag[11:0], dir[1:0]}，
-    // 所以 mag8 = mag >> 3 = w[13:5]（写成函数，免得两处取错比特位）。
+    // 即 w[13:2] = mag，所以 mag8 = mag >> 3 = w[13:5] 的低 8 位 = w[12:5]。
+    // 直接写 w[12:5] 而不是 w[13:5]：mag = |Gx|+|Gy| 上界 2040 < 2048，mag[11]
+    // 恒为 0（mag8 上界 255，也印证最高位恒 0），写全 9 bit 会被截掉最高位、
+    // 综合工具也会报 WIDTHTRUNC。写成函数，免得两处取错比特位。
     function [7:0] mag8_of;
         input [13:0] w;
         begin
-            mag8_of = w[13:5];
+            mag8_of = w[12:5];
         end
     endfunction
 
