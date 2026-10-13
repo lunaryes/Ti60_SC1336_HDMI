@@ -8,7 +8,7 @@
 //   rgb_i ──► rgb_to_gray ──► pix_window_3x3 ──► sobel_edge ──┐
 //       │            (Y8)          (3x3 灰度窗)   (mag / edge) │
 //       │                                                      ▼
-//       └───────────────► orig_dly(6 拍) ───────────────► image_mix ──► rgb_o
+//       └───────────────► orig_dly(7 拍) ───────────────► image_mix ──► rgb_o
 //                                                        (mode 选通)
 //
 // 【对外延迟】LATENCY = 8 拍，数据与握手信号严格同拍：
