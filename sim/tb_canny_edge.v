@@ -34,10 +34,14 @@ module tb_canny_edge;
     localparam FRAME     = ACT_END + VS_TAIL + 2;
     localparam CAP_FRAME = 2;                  // 抓第 3 帧（行缓存已填满）
 
-    // 阈值域是内部 mag8 = mag>>3（方案 §3.8）：40 对应真实 |Gx|+|Gy| = 320。
+    // 阈值域是内部 mag8 = mag>>3（方案 §3.8）：16 对应真实 |Gx|+|Gy| = 128。
     // ★ 与 sobel_edge 的 thr_i（先饱和到 255 再比）不可混用。
-    localparam THR_HIGH = 40;                  // 强边阈值
-    localparam THR_LOW  = 20;                  // 弱边阈值（>= 它的才有资格被连接）
+    // ★★ M5 重标定：40/20 → 16/8。可用量程只有 0..96（3x3 高斯把 Sobel 的 4A
+    //    阶跃响应压成 3A，mag8 ≈ 3·ΔY/8），thr=40 实际要求 ΔY ≥ 107 = 满幅 42%，
+    //    这就是"只有高对比度才出边"的根因。必须与 sim/canny_ref.py、
+    //    image_pipeline_top.v 的默认值、example_top.v 的 IMG_THR_DEF 四处同步。
+    localparam THR_HIGH = 16;                  // 强边阈值（ΔY ≥ 43 = 满幅 17%）
+    localparam THR_LOW  = 8;                   // 弱边阈值（>= 它的才有资格被连接）
 
     //------------------------------------------------------------------
     // 时钟 / 复位

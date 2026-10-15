@@ -1099,23 +1099,72 @@ module example_top
 wire [7:0] w_rgb_r;
 wire [7:0] w_rgb_g;
 wire [7:0] w_rgb_b;
-wire     [17:0]     w_rgb_r_mult = w_rgb_pre_r * 409; 
-wire     [17:0]     w_rgb_b_mult = w_rgb_pre_b * 384; 
-assign w_rgb_r = w_rgb_r_mult[17:16] ? 8'hFF : w_rgb_r_mult[15: 8]; 
-assign w_rgb_g = w_rgb_pre_g; 
-assign w_rgb_b = w_rgb_b_mult[17:16] ? 8'hFF : w_rgb_b_mult[15: 8]; 
+// ★ 2026-10-15：两个增益从写死的常数（409/384）改成**运行时可调寄存器**（由 uart_cmd 给出；
+//   复位值 102/96 与 409/384 只差 0.25%/0%，不插串口时画面与改动前逐像素一致）。
+//   动机：上板实测"白墙在正常室内白灯下发青" = 相机链路 R 通道偏低，写死的 ×1.6 补不回来；
+//   而调这个系数要试好几轮，所以做成旋钮（'A'/'B' 命令）而不是改常数反复综合。
+//   定点：增益 = byte/64；R' = (R*gain)>>6，饱和判据 (R*gain) >= 256*64 = 16384。
+wire     [   7:0]   r_awb_gain;                       // 来自 uart_cmd（复位 102 ≈ ×1.59）
+wire     [   7:0]   b_awb_gain;                       // 来自 uart_cmd（复位  96  = ×1.50）
+wire     [15:0]     w_rgb_r_mult = w_rgb_pre_r * r_awb_gain;
+wire     [15:0]     w_rgb_b_mult = w_rgb_pre_b * b_awb_gain;
+wire     [ 9:0]     w_rgb_r_sc   = w_rgb_r_mult[15:6];
+wire     [ 9:0]     w_rgb_b_sc   = w_rgb_b_mult[15:6];
+assign w_rgb_r = (w_rgb_r_mult >= 16'd16384) ? 8'hFF : w_rgb_r_sc[7:0];
+assign w_rgb_g = w_rgb_pre_g;
+assign w_rgb_b = (w_rgb_b_mult >= 16'd16384) ? 8'hFF : w_rgb_b_sc[7:0];
 
 // =========================================================================================================================================
 // Image pipeline : rgb_to_gray -> pix_window_3x3 -> canny_edge -> image_mix
 // 插入点：AWB 之后、FrameBoundCrop 之前（docs/ARCH.md §1），全部在 clk_pixel 单域
 // =========================================================================================================================================
-localparam IMG_MODE = 2'd3;      // 0=原图 1=边缘图 2=分屏(左原图+右边缘) 3=画中画(暂等同分屏)
-localparam IMG_THR  = 8'd40;     // Canny 强边阈值（内部 mag8 = mag>>3 域，弱边阈值 = 该值/2）
-localparam IMG_LAT  = 16;        // = image_pipeline_top 的 LATENCY，两处必须一致
+localparam IMG_MODE_DEF = 2'd3;  // 0=原图 1=边缘图 2=分屏(左原图+右边缘) 3=画中画(暂等同分屏)
+localparam IMG_VIEW_DEF = 2'd0;  // 0=二值边缘图 1=mag8 图 2=四类假彩图 3=Y 图
+                                 // （四种视图的口径见 image_pipeline_top 的【view_i】）
+localparam IMG_THR_DEF  = 8'd12; // Canny 强边阈值（内部 mag8 = mag>>3 域，弱边 = 该值/2）
+                                 // ★★ 从 40 → 16 → 12：原值 40 实际要求满幅 **42%** 的对比度
+                                 //    （这个口不是 0..255 量程），是"只有高对比度才出边"的根因；
+                                 //    2026-10-15 上板扫出来的最佳工作点是 12（除最暗的紫/灰外全部
+                                 //    检出、且没有多余细线），所以复位值落 12。完整的反查标尺见
+                                 //    canny_edge.v 头注释；板上仍可用 'T' 命令随时改。
+                                 //    ★ 若以后把采集端修好（AWB/曝光/换打印纸卡），可以再抬回 16。
+localparam IMG_LAT      = 16;    // = image_pipeline_top 的 LATENCY，两处必须一致
 
 wire                                    pipe_vs                    ;
 wire                                    pipe_de                    ;
 wire                   [  23:0]         pipe_rgb                   ;
+wire                   [   7:0]         r_img_thr                  ;
+wire                   [   1:0]         r_img_mode                 ;
+wire                   [   1:0]         r_img_view                 ;
+
+//---------------------------------------------------------------------
+// 串口命令接口：把 thr / mode / view 从编译期常量变成运行时寄存器，
+// 现场调参不用重新综合。uart_rx_i / uart_tx_o 早已声明并在
+// Ti60_Demo.peri.xml 里分配了引脚（GPIOT_N_16 / GPIOT_P_16），此前全工程
+// 从未引用。跑在 clk_pixel 域，与流水线同域，不需要 CDC。
+// 命令格式（2 字节帧：命令 + 参数）：'T'<thr> 'V'<view> 'M'<mode>，'A'<AWB R 增益>，
+// 'B'<AWB B 增益>，'R' 回读 6 字节 {thr, view, mode, gain_r, gain_b, '\n'}。
+// 详见 src/common/uart_cmd.v。
+//---------------------------------------------------------------------
+uart_cmd #(
+    .CLK_FREQ (74250000),        // clk_pixel
+    .BAUD     (460800),
+    .THR_DEF  (IMG_THR_DEF),
+    .VIEW_DEF (IMG_VIEW_DEF),
+    .MODE_DEF (IMG_MODE_DEF)
+) u_uart_cmd (
+    .clk    (clk_pixel                 ),
+    .rst_n  (rstn_pixel                ),
+    .rx_i   (uart_rx_i                 ),
+    .tx_o   (uart_tx_o                 ),
+
+    .thr_o  (r_img_thr                 ),
+    .view_o (r_img_view                ),
+    .mode_o (r_img_mode                ),
+
+    .gain_r_o (r_awb_gain              ),   // AWB R 增益（1/64 定点，复位 102 ≈ ×1.59）
+    .gain_b_o (b_awb_gain              )    // AWB B 增益（复位 96 = ×1.50）
+);
 
 image_pipeline_top #(.IMG_W(1280),.IMG_H(720),.LATENCY(IMG_LAT)) u_image_pipeline(
     .clk_i                             (clk_pixel                 ),
@@ -1124,8 +1173,9 @@ image_pipeline_top #(.IMG_W(1280),.IMG_H(720),.LATENCY(IMG_LAT)) u_image_pipelin
     .vsync_i                           (w_rgb_vsync               ),
     .de_i                              (w_rgb_href                ),
     .rgb_i                             ({w_rgb_r, w_rgb_g, w_rgb_b}),
-    .thr_i                             (IMG_THR                   ),
-    .mode_i                            (IMG_MODE                  ),
+    .thr_i                             (r_img_thr                 ),
+    .mode_i                            (r_img_mode                ),
+    .view_i                            (r_img_view                ),
 
     .vsync_o                           (pipe_vs                   ),
     .de_o                              (pipe_de                   ),

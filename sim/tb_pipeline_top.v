@@ -1,22 +1,26 @@
 `timescale 1ns/1ps
 //=====================================================================
-// image_pipeline_top 验证台（M4：接入 Canny 之后的集成回归）
+// image_pipeline_top 验证台（M5：view_i 四视图 + 阈值重标定之后的集成回归）
 //---------------------------------------------------------------------
 // 激励：把灰图当 {g,g,g} 灌进去 —— rgb_to_gray 的 Y = (77+150+29)*g>>8 = g，
 //       正好原值还原，所以边缘图可以和 tb_canny_edge 用同一套 .hex 图样。
 // 结构：同一个输入同时喂
-//         · u_bin —— EDGE_BINARY = 1（真实工程配置）
-//         · u_mag —— EDGE_BINARY = 0（{mag,mag,mag}）
-//         · 旁路参考链 pix_window_3x3 + canny_edge（阈值 40/20，与顶层
-//           thr_i = 40 → 40/20 的映射一致，映射写错这里就会报）
+//         · u_dut —— image_pipeline_top（真实工程配置）
+//         · 旁路参考链 pix_window_3x3 + canny_edge（阈值 16/8，与顶层
+//           thr_i = 16 → 16/8 的映射一致，映射写错这里就会报）
 // 自检项（全在 Verilog 里，不依赖 Python；算法本身的精度归 tb_canny_edge.v）：
 //   1) 延迟：src_de 上升沿 → bin_de 上升沿 = IMG_LAT；vsync 同理且**高电平宽度
 //      不变**（送到 rgb2dvi 的 VS 不能被压窄，否则显示器锁不住帧）
 //   2) mode 0 旁路：bin_rgb 与 rgb_i 延迟 IMG_LAT 逐像素一致，**每个时钟沿都比**
 //      （含消隐期：原图路径是纯寄存器延迟，image_mix 又不在 de=0 时清零）
-//   3) mode 1：bin_rgb = 参考链 edge 的 {FF,FF,FF}/0；u_mag = {mag,mag,mag}
+//   3) mode 1 的四种 view 各对一遍参考链：
+//        view 0 二值边缘图 / 1 mag8 图（min(mag8<<1,255)）/ 2 四类假彩图 / 3 Y 图
 //   4) mode 2/3：第 < IMG_W/2 列 = 原图、其余 = 边缘图，逐行逐点查
-//   5) 帧间靠 mode 只在帧首切换，输出与输入逐拍对齐（不做帧号对齐）
+//   5) 帧间靠 mode/view 只在帧首切换，输出与输入逐拍对齐（不做帧号对齐）
+//
+//   注：view 3（Y 图）在这个台子里和原图黄金值恰好相等 —— 激励是 {g,g,g}，
+//       rgb_to_gray 恒等。它验证的是 y_dly 的延迟深度对不对（差一拍就整帧错），
+//       不是灰度公式；灰度公式由 tb_rgb_to_gray.v 单独验。
 //
 // 运行： ./obj_dir/Vtb_pipeline_top +STIM=xxx.hex     （见 sim/run.sh）
 //=====================================================================
@@ -28,8 +32,8 @@ module tb_pipeline_top;
     // 改 RTL 延迟时这里要跟着改（有意写死，避免"改了 RTL 测试台自动跟随"）
     localparam IMG_LAT  = 16;                  // image_pipeline_top.LATENCY
                                                // （内部 = 原图 15 拍 + image_mix 1 拍）
-    localparam THR_HIGH = 8'd40;               // = 顶层 thr_i
-    localparam THR_LOW  = 8'd20;               // = 顶层内部 thr_i >> 1
+    localparam THR_HIGH = 8'd16;               // = 顶层 thr_i（M5：由 40 改为 16）
+    localparam THR_LOW  = 8'd8;                // = 顶层内部 thr_i >> 1
 
     localparam H_BLANK  = 6;
     localparam VS_LEAD  = 4;
@@ -37,7 +41,7 @@ module tb_pipeline_top;
     localparam H_LINE   = IMG_W + H_BLANK;
     localparam ACT_END  = VS_LEAD + IMG_H*H_LINE;
     localparam FRAME    = ACT_END + VS_TAIL + 2;
-    localparam NFRAME   = 6;                   // 帧 2/3/4 分别是 mode 1/2/3
+    localparam NFRAME   = 9;                   // 帧 0/1 旁路，2..8 见下面的调度
 
     localparam HALF_W   = IMG_W / 2;           // 分屏分界列（与 image_mix 一致）
 
@@ -98,48 +102,46 @@ module tb_pipeline_top;
     wire [23:0] src_rgb = {src_gray, src_gray, src_gray};
 
     //------------------------------------------------------------------
-    // mode 调度：帧 0/1 = 0（旁路）、2 = 1（边缘）、3 = 2（分屏）、4 = 3（同 2）
+    // mode / view 调度（M5：view_i 改成运行时端口，原来靠 EDGE_BINARY 例化两个
+    //   DUT、现在一个 DUT 逐帧切 view 就够）
+    //   帧 0/1 = 旁路(0/0)、2 = 边缘(view 0)、3 = 分屏(2)、4 = 画中画(3)、
+    //   5 = mag8 图(view 1)、6 = 假彩图(view 2)、7 = Y 图(view 3)、8 = 再回旁路
     //   只在帧首切换，切换点落在帧消隐里，输出侧逐拍对齐不受影响
     //------------------------------------------------------------------
     reg [1:0] mode = 2'd0;
+    reg [1:0] view = 2'd0;
 
     always @(posedge clk or negedge rst_n) begin
-        if (!rst_n)         mode <= 2'd0;
-        else if (fcyc == 0) mode <= (frame == 2) ? 2'd1 :
-                                   (frame == 3) ? 2'd2 :
-                                   (frame == 4) ? 2'd3 : 2'd0;
+        if (!rst_n) begin
+            mode <= 2'd0;
+            view <= 2'd0;
+        end else if (fcyc == 0) begin
+            case (frame)
+                2:       begin mode <= 2'd1; view <= 2'd0; end   // 二值边缘图
+                3:       begin mode <= 2'd2; view <= 2'd0; end   // 分屏
+                4:       begin mode <= 2'd3; view <= 2'd0; end   // 画中画（同分屏）
+                5:       begin mode <= 2'd1; view <= 2'd1; end   // mag8 图
+                6:       begin mode <= 2'd1; view <= 2'd2; end   // 四类假彩图
+                7:       begin mode <= 2'd1; view <= 2'd3; end   // Y 图
+                default: begin mode <= 2'd0; view <= 2'd0; end   // 旁路
+            endcase
+        end
     end
 
     //------------------------------------------------------------------
-    // DUT 1：EDGE_BINARY = 1（真实工程配置）
+    // DUT（真实工程配置）。输出信号沿用 M4 的 bin_* 名字，现在它就是唯一的 DUT。
     //------------------------------------------------------------------
     wire        bin_vs, bin_de;
     wire [23:0] bin_rgb;
 
     image_pipeline_top #(
         .IMG_W (IMG_W), .IMG_H (IMG_H),
-        .EDGE_BINARY (1), .LATENCY (IMG_LAT)
-    ) u_bin (
+        .LATENCY (IMG_LAT)
+    ) u_dut (
         .clk_i (clk), .rst_ni (rst_n),
         .vsync_i (src_vs), .de_i (src_de), .rgb_i (src_rgb),
-        .thr_i (THR_HIGH), .mode_i (mode),
+        .thr_i (THR_HIGH), .mode_i (mode), .view_i (view),
         .vsync_o (bin_vs), .de_o (bin_de), .rgb_o (bin_rgb)
-    );
-
-    //------------------------------------------------------------------
-    // DUT 2：EDGE_BINARY = 0（{mag,mag,mag}），只查 mode 1
-    //------------------------------------------------------------------
-    wire        mag_vs, mag_de;
-    wire [23:0] mag_rgb;
-
-    image_pipeline_top #(
-        .IMG_W (IMG_W), .IMG_H (IMG_H),
-        .EDGE_BINARY (0), .LATENCY (IMG_LAT)
-    ) u_mag (
-        .clk_i (clk), .rst_ni (rst_n),
-        .vsync_i (src_vs), .de_i (src_de), .rgb_i (src_rgb),
-        .thr_i (THR_HIGH), .mode_i (mode),
-        .vsync_o (mag_vs), .de_o (mag_de), .rgb_o (mag_rgb)
     );
 
     //------------------------------------------------------------------
@@ -171,7 +173,8 @@ module tb_pipeline_top;
     );
 
     wire        ref_vs, ref_de, ref_edge;
-    wire [7:0]  ref_mag;
+    wire [7:0]  ref_mag, ref_mag8;
+    wire [1:0]  ref_cls;
 
     canny_edge #(.IMG_W (IMG_W), .LATENCY (12)) u_ref_canny (
         .clk (clk), .rst_n (rst_n),
@@ -181,21 +184,33 @@ module tb_pipeline_top;
         .p31 (rp31), .p32 (rp32), .p33 (rp33),
         .thr_high_i (THR_HIGH), .thr_low_i (THR_LOW),
         .vsync_o (ref_vs), .de_o (ref_de),
-        .mag_o (ref_mag), .edge_o (ref_edge)
+        .mag_o (ref_mag), .edge_o (ref_edge),
+        .mag8_o (ref_mag8), .cls_o (ref_cls)
     );
 
     // 参考链的输出还要再晚 1 拍才是顶层出口：中间隔着 image_mix 那唯一一级输出
     // 寄存器（它不按 de 清零，所以连消隐期也逐拍对应）
+    // 四种 view 的黄金值（组合值与顶层同名逻辑一一对应，改一处必须改两处）
+    wire [8:0]  ref_mag8x2  = {1'b0, ref_mag8} << 1;
+    wire [7:0]  ref_mag8v   = ref_mag8x2[8] ? 8'hFF : ref_mag8x2[7:0];
+    wire [23:0] ref_cls_rgb = (ref_cls == 2'b11) ? 24'hFFFFFF :
+                              (ref_cls == 2'b10) ? 24'h0000FF :
+                              (ref_cls == 2'b01) ? 24'h800000 : 24'h000000;
+
     reg [23:0] ref_edge_rgb = 24'h000000;
-    reg [23:0] ref_mag_rgb  = 24'h000000;
+    reg [23:0] ref_mag8_rgb = 24'h000000;
+    reg [23:0] ref_cls_d_rgb = 24'h000000;
+    reg [23:0] ref_y_rgb    = 24'h000000;   // 在下面 src_dly 声明之后再驱动
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            ref_edge_rgb <= 24'h000000;
-            ref_mag_rgb  <= 24'h000000;
+            ref_edge_rgb  <= 24'h000000;
+            ref_mag8_rgb  <= 24'h000000;
+            ref_cls_d_rgb <= 24'h000000;
         end else begin
-            ref_edge_rgb <= ref_edge ? 24'hFFFFFF : 24'h000000;
-            ref_mag_rgb  <= {ref_mag, ref_mag, ref_mag};
+            ref_edge_rgb  <= ref_edge ? 24'hFFFFFF : 24'h000000;
+            ref_mag8_rgb  <= {ref_mag8v, ref_mag8v, ref_mag8v};
+            ref_cls_d_rgb <= ref_cls_rgb;
         end
     end
 
@@ -215,6 +230,15 @@ module tb_pipeline_top;
     end
 
     wire [23:0] ref_orig_rgb = src_dly[IMG_LAT-1];
+
+    // view 3 的黄金值：顶层进 image_mix 的是 y_dly[ORIG_LAT-2]，即"rgb_i 延迟
+    // ORIG_LAT-1 = 15 拍"的灰度值 = src_dly[IMG_LAT-2]；再经 image_mix 那 1 拍
+    // 寄存器才是顶层出口，所以这里寄一次得到 IMG_LAT = 16 拍。
+    // 激励是 {g,g,g}，rgb_to_gray 恒等，所以黄金额度就是原图本身。
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) ref_y_rgb <= 24'h000000;
+        else        ref_y_rgb <= src_dly[IMG_LAT-2];
+    end
 
     //------------------------------------------------------------------
     // 检查 1：延迟 + vsync 高电平宽度
@@ -256,20 +280,23 @@ module tb_pipeline_top;
     end
 
     //------------------------------------------------------------------
-    // 检查 2..4：按 mode 比对（mode_d = 产生这一拍输出的那个 mode）
+    // 检查 2..5：按 mode/view 比对（mode_d/view_d = 产生这一拍输出的那一组）
     //------------------------------------------------------------------
     reg [1:0] mode_d = 2'd0;
+    reg [1:0] view_d = 2'd0;
 
-    integer err_bypass = 0, err_edge = 0, err_mag = 0, err_split = 0;
+    integer err_bypass = 0, err_edge = 0, err_split = 0;
+    integer err_mag8 = 0, err_cls = 0, err_y = 0;
     integer out_pix = 0;                       // 本行已输出的像素数（1 基计数）
     integer out_col = 0;                       // 本行当前输出像素的 0 基列号
     integer row_cnt = 0, short_rows = 0, long_rows = 0;
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            mode_d <= 2'd0; out_pix = 0; out_col = 0; row_cnt = 0;
+            mode_d <= 2'd0; view_d <= 2'd0; out_pix = 0; out_col = 0; row_cnt = 0;
         end else begin
             mode_d <= mode;
+            view_d <= view;
 
 
             // 行内计数（与 image_mix 的 col_cnt 对齐：输出第 k 拍 = 第 k 列）
@@ -292,8 +319,13 @@ module tb_pipeline_top;
                     if (bin_rgb !== ref_orig_rgb) err_bypass = err_bypass + 1;
                 end
                 2'd1: begin
-                    if (bin_rgb !== ref_edge_rgb) err_edge = err_edge + 1;
-                    if (mag_rgb !== ref_mag_rgb)  err_mag  = err_mag  + 1;
+                    case (view_d)
+                        2'd0: if (bin_rgb !== ref_edge_rgb)  err_edge = err_edge + 1;
+                        2'd1: if (bin_rgb !== ref_mag8_rgb)  err_mag8 = err_mag8 + 1;
+                        2'd2: if (bin_rgb !== ref_cls_d_rgb) err_cls  = err_cls  + 1;
+                        2'd3: if (bin_rgb !== ref_y_rgb)     err_y    = err_y    + 1;
+                        default: ;
+                    endcase
                 end
                 2'd2, 2'd3: begin
                     if (bin_de) begin
@@ -325,7 +357,10 @@ module tb_pipeline_top;
         $display("VSYNC    高电平宽度不符的帧数 %0d", vs_width_err);
         $display("ROWS     %0d SHORT %0d LONG %0d", row_cnt, short_rows, long_rows);
         $display("MODE0    旁路逐像素失配 %0d 点", err_bypass);
-        $display("MODE1    边缘图失配 %0d 点 / mag 图失配 %0d 点", err_edge, err_mag);
+        $display("VIEW0    二值边缘图失配 %0d 点", err_edge);
+        $display("VIEW1    mag8 图失配 %0d 点", err_mag8);
+        $display("VIEW2    四类假彩图失配 %0d 点", err_cls);
+        $display("VIEW3    Y 图失配 %0d 点", err_y);
         $display("MODE2/3  分屏失配 %0d 点", err_split);
 
         if ((de_rise_o - de_rise_i) != IMG_LAT)    begin fails=fails+1; $display("FAIL: de 延迟不符"); end
@@ -333,7 +368,10 @@ module tb_pipeline_top;
         if (vs_width_err != 0)                     begin fails=fails+1; $display("FAIL: vsync 宽度变了"); end
         if (short_rows != 0 || long_rows != 0)     begin fails=fails+1; $display("FAIL: 每行像素数不对"); end
         if (err_bypass != 0)                       begin fails=fails+1; $display("FAIL: mode 0 旁路不逐像素一致"); end
-        if (err_edge != 0 || err_mag != 0)         begin fails=fails+1; $display("FAIL: mode 1 边缘图/mag 图不符"); end
+        if (err_edge != 0)                         begin fails=fails+1; $display("FAIL: view 0 二值边缘图不符"); end
+        if (err_mag8 != 0)                         begin fails=fails+1; $display("FAIL: view 1 mag8 图不符"); end
+        if (err_cls  != 0)                         begin fails=fails+1; $display("FAIL: view 2 假彩图不符"); end
+        if (err_y    != 0)                         begin fails=fails+1; $display("FAIL: view 3 Y 图不符"); end
         if (err_split != 0)                        begin fails=fails+1; $display("FAIL: mode 2/3 分屏不符"); end
 
         if (fails == 0) $display("TOP PASS");

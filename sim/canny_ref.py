@@ -38,8 +38,15 @@ import sys
 
 # 阈值域是内部 mag8 = mag>>3（方案 §3.8），与 tb_canny_edge.v 一致。
 # ★ 与 sobel_edge 的 thr_i（先饱和到 255 再比）不可混用。
-THR_HIGH = 40   # 强边阈值（mag8 域，等价真实 |Gx|+|Gy| = 320）
-THR_LOW = 20    # 弱边阈值（>= 它的才可能被滞后连接）
+#
+# ★★ M5 重标定：原来 40/20，改成 16/8。
+#   3x3 高斯把 Sobel 的 4A 阶跃响应压成 3A，所以横竖满对比度边（ΔY=255）的
+#   mag 只有 768、mag8 上限是 **96 而不是 255**（对角约 140）。8bit 口按 0..255
+#   折算刻度就高估了 2.7 倍：thr=40 实际要求 ΔY >= 107 = **满幅 42%**，
+#   这正是"只有高对比度才出边"的根因。16/8 对应 ΔY >= 43 / 22（17% / 9%）。
+#   标尺：mag8 ≈ 3·ΔY/8（横竖）、≈ 4.375·ΔY/8（对角）；thr_high 不要超过 48。
+THR_HIGH = 16   # 强边阈值（mag8 域，等价真实 |Gx|+|Gy| = 128 → ΔY ≥ 43）
+THR_LOW = 8     # 弱边阈值（>= 它的才可能被滞后连接）→ ΔY ≥ 22
 
 # M2 流水线的固有空间偏移：RTL 输出 (r,c) 上的像素 = 理想参考 (r+DR, c+DC)。
 # 由窗口链推出：pix_window_3x3 的中心偏 (-1,0) → canny 内的高斯窗口再 (-1,0)
@@ -221,15 +228,23 @@ def pat_checker(W, H, cell=4):
     return [[255 if ((r // cell) + (c // cell)) % 2 else 0 for c in range(W)] for r in range(H)]
 
 
-def pat_faint(W, H, link, amp=64, bg=60):
+def pat_faint(W, H, link, amp=32, bg=60):
     """强弱边混合（方案 §8 用例 5）：竖边界上半段是强边（幅值 160 → mag8=60），
-    下半段是弱边（幅值 64 → mag8=24，落在 [thr_low, thr_high) 里）。
+    下半段是弱边（幅值 32 → mag8=12，落在 [thr_low, thr_high) 里）。
 
-    amp=64 是算出来的：竖阶跃经高斯后 Gx 峰值 = 3*amp，mag8 = 3*amp/8 = 24；
-    取 64 让它稳稳落在 [20,40) 中间，不受边界四舍五入影响。
+    amp=32 是算出来的：竖阶跃经高斯后 Gx 峰值 = 3*amp，mag8 = 3*amp/8 = 12；
+    取 32 让它稳稳落在 [8,16) 中间，不受边界四舍五入影响。
+    ★ 随阈值常量联动：M5 改 40/20→16/8 时 amp 从 64 降到 32，否则 mag8=24 会
+      越过新 thr_high 变成强边，这个图样就悄悄测不到滞后逻辑了。
 
     link=True  → 弱边顶端紧挨强边底端，滞后应当把整条弱边连上；
     link=False → 没有强边，弱边孤立，滞后应当把它整条丢掉。
+
+    ★ M5 阈值改动（40/20 → 16/8）后实测的两件事，别当成 bug：
+      · 拐角像素 (H/2, W/2) 处 |Gx|+|Gy| = 12+12 恰好凑到 mag8=16 = thr_high，
+        凭空多出一个强边像素；所以 faint_iso 里贴拐角的那两三个弱像素**会**被
+        连上。规格断言按"8 邻域有没有强像素"分类，不受这个影响。
+      · 下半幅那条约 40 像素的弱链，单遍滞后只连上最上面 2 个（见 main() 的打印）。
     """
     img = [[bg] * W for _ in range(H)]
     for r in range(H):
@@ -240,6 +255,47 @@ def pat_faint(W, H, link, amp=64, bg=60):
                 img[r][c] = 220 if link else bg          # 上半段：强边（或不放）
             else:
                 img[r][c] = bg + amp                     # 下半段：弱边
+    return img
+
+
+# ---------------------------------------------------------------------
+# ΔY 阶梯（M5 新增）
+#
+# 为什么要它：其余 12 个图样都是"实现对不对"的比对——参考模型与 DUT **共享同一组
+# 阈值常量**，所以阈值整体标偏了它俩会一起偏，回归在结构上验证不了"阈值合不合适"，
+# M5 那次"只有高对比度才出边"就是这么漏过去的。
+# 这个图样专门喂**与阈值无关的规格断言**（见 main() 的 ladder 分支）：亮度差大到
+# 该出的边必须整条出，小到不该出的边不许连成线。
+# ---------------------------------------------------------------------
+LADDER_BG     = 32     # 背景灰度（刻意压暗，好让 ΔY 全落在 0..255 内不削顶）
+LADDER_DY     = (16, 32, 48, 64, 96, 128, 160, 192)   # 竖条相对背景的亮度差
+LADDER_STRIPE = 4      # 竖条宽度（列）
+LADDER_PITCH  = 8      # 条 + 间隔，间隔 4 列 > 高斯+Sobel 的 ±2 支撑
+LADDER_C0     = 4      # 第一条竖条的起始列
+
+
+def ladder_bands(W, H):
+    """→ [(dy, c0)]，只保留整条竖条都在画面内的档位"""
+    out = []
+    for k, dy in enumerate(LADDER_DY):
+        c0 = LADDER_C0 + k * LADDER_PITCH
+        if c0 + LADDER_STRIPE > W:
+            break
+        out.append((dy, c0))
+    return out
+
+
+def pat_ladder(W, H, bg=LADDER_BG):
+    """ΔY 阶梯图样：背景上排一列竖条，每条相对背景的亮度差是一档已知值。
+
+    竖条之间留 4 列背景（LADDER_PITCH - LADDER_STRIPE = 4），比高斯 + Sobel 的
+    ±2 支撑还宽，所以每条边界都能当**孤立阶跃**看，邻居的梯度不会串进来。
+    """
+    img = [[bg] * W for _ in range(H)]
+    for dy, c0 in ladder_bands(W, H):
+        for r in range(H):
+            for c in range(c0, c0 + LADDER_STRIPE):
+                img[r][c] = bg + dy
     return img
 
 
@@ -314,6 +370,7 @@ PATTERNS = {
     "step_135": lambda W, H: pat_step(W, H, "135"),
     "faint_link": lambda W, H: pat_faint(W, H, True),    # 弱边接在强边上 → 应连上
     "faint_iso":  lambda W, H: pat_faint(W, H, False),   # 弱边孤立 → 应丢掉
+    "ladder":   pat_ladder,                              # ΔY 阶梯 → 阈值标定规格断言
 }
 
 
@@ -416,6 +473,19 @@ def main():
             print("未知图样：%s（可选：%s）" % (n, ", ".join(PATTERNS)))
             return 2
     fails = 0
+
+    # ★ M5 事故护栏：thr_high 的**可用量程只有 0..96**（横竖边，对角约 140），
+    #   不是 0..255 —— 3x3 高斯把 Sobel 的 4A 阶跃响应压成了 3A（mag8 ≈ 3·ΔY/8）。
+    #   thr_high 超过 48（= 量程一半）就等于关掉边缘检测，这一档必须挡住，免得
+    #   下次又靠"上板看效果"才发现（这次事故就是这么发生的）。
+    if THR_HIGH > 48:
+        print("⚠️ 配置错误：THR_HIGH=%d 超过可用量程 96 的一半，等于关掉边缘检测"
+              % THR_HIGH)
+        print("   （满对比度 ΔY=255 的横竖边 mag8 只有 96；详见 canny_edge.v 头注释）")
+        fails += 1
+    if THR_LOW >= THR_HIGH:
+        print("⚠️ 配置错误：THR_LOW=%d 不小于 THR_HIGH=%d" % (THR_LOW, THR_HIGH))
+        fails += 1
 
     for name in names:
         img = PATTERNS[name](W, H)
@@ -520,23 +590,99 @@ def main():
                 fails += 1
                 print("  !! FAIL: 均匀场在内部/edge 上出现了响应")
 
-        # 滞后行为自检：弱边接在强边上应被连上；孤立弱边应被整条丢掉
+        # 滞后行为规格断言（M5 改成定量）：弱边接在强边上应被连上；孤立弱边应整条丢掉
+        #
+        # 口径（★ 别用"参考模型最终 edge 里的弱像素"当分母，那样是循环定义）：
+        #   分母 = **过了 NMS 的弱边候选**（mag8 ∈ [thr_low, thr_high)），按"8 邻域内
+        #   有没有强像素"分成两拨，分别对照 DUT 的 edge 输出：
+        #     · 贴着强边的（near）：滞后契约要求**一个都不能漏**；
+        #     · 孤立的（iso）  ：滞后契约要求**一个都不能留**，全部丢弃。
+        #   两拨都是几十个像素量级，所以这个用例真的在测东西（原来只判 `>0`，
+        #   faint_iso 里其实只有 2 个像素同时满足"参考连上"和"弱"，等于没测）。
+        # ★ 现在的"单遍滞后"不是真连通传播，只是**把强边集外扩 1 像素**（判据用的是
+        #   未过 NMS 的原始 mag8，无法递归），所以 faint_link 里那条约 40 像素的弱链
+        #   只有紧贴强边的两三个被连上。这是**已知退化**，见 docs/CANNY_PLAN.md §3.7；
+        #   上面的契约断言对"贴着强边的那几个"提要求，正好与退化程度无关。若将来按
+        #   §3.7 重做成真传播，这个用例不用改，直接会多出"整条链都被连上"的覆盖。
         if name.startswith("faint"):
             want_on = name == "faint_link"
-            dut_weak = 0
-            for r in range(6, H - 6):
-                for c in range(6, W - 6):
-                    rr, cc = r + dr, c + dc
-                    if not (2 <= rr <= H - 3 and 2 <= cc <= W - 3):
+            _, dirs_w = ref_grad(img, W, H)
+            keep_w   = ref_nms(ref_mags, dirs_w, W, H)
+            near_n = near_kept = iso_n = iso_kept = 0
+            for r in range(4, H - 4):
+                for c in range(4, W - 4):
+                    if not keep_w[r][c]:
                         continue
-                    if dut_edge[r][c] and (ref_mags[rr][cc] >> 3) < THR_HIGH:
-                        dut_weak += 1
-            print("  滞后行为（%s）：DUT 最终 edge 里的弱边像素 %d 个（期望%s %s）"
-                  % ("弱边接在强边上" if want_on else "孤立弱边", dut_weak,
-                     "> 0" if want_on else "==", "0" if not want_on else ""))
-            if (dut_weak > 0) != want_on:
+                    if not (THR_LOW <= (ref_mags[r][c] >> 3) < THR_HIGH):
+                        continue                       # 只看过了 NMS 的弱边候选
+                    near = any(ref_mags[clamp(r + i, 0, H - 1)][clamp(c + j, 0, W - 1)] >> 3
+                               >= THR_HIGH
+                               for i in (-1, 0, 1) for j in (-1, 0, 1) if (i, j) != (0, 0))
+                    rr, cc = r - dr, c - dc            # 参考坐标 → DUT 坐标
+                    dutv = (0 <= rr < H and 0 <= cc < W and bool(dut_edge[rr][cc]))
+                    if near:
+                        near_n += 1
+                        near_kept += 1 if dutv else 0
+                    else:
+                        iso_n += 1
+                        iso_kept += 1 if dutv else 0
+            print("  滞后行为（%s）：弱边候选 %d 个 —— 贴强边 %d 个（DUT 连上 %d，契约要求全连）"
+                  "；孤立 %d 个（DUT 保留 %d，契约要求全丢）"
+                  % ("弱边接在强边上" if want_on else "孤立弱边",
+                     near_n + iso_n, near_n, near_kept, iso_n, iso_kept))
+            if near_kept != near_n:
                 fails += 1
-                print("  !! FAIL: 滞后没有按预期%s弱边" % ("连接" if want_on else "丢弃"))
+                print("  !! FAIL: 贴着强边的弱边应全部被滞后连上，漏了 %d 个" % (near_n - near_kept))
+            if iso_kept:
+                fails += 1
+                print("  !! FAIL: 孤立弱边应当整条丢弃，DUT 却留了 %d 个像素" % iso_kept)
+            if want_on and near_n == 0:
+                fails += 1
+                print("  !! FAIL: faint_link 里没有弱边贴着强边，这个用例已经测不到滞后")
+
+        # ★★★ 阈值标定规格断言（M5 新增，唯一能失败在"阈值不合适"上的用例类）★★★
+        # 其余图样都是跟参考模型逐点比对，而参考模型和 DUT **共享同一组阈值常量**，
+        # 阈值整体标偏了它俩一起偏、逐点比对照样 0 失配。这里改成查**规格**：
+        #   · ΔY ≥ 128 的竖边界（mag8 ≥ 48，任何 thr_high ≤ 48 都必须判强边）
+        #     → 整条边界每一行都得有 edge 像素；
+        #   · ΔY ≤ 32 的竖边界（mag8 ≤ 12，thr_high=16 时是弱边且孤立）
+        #     → 不许连成线（最多允许 2 行零星像素，防噪声误报）。
+        # 这两条与实现无关、与阈值大小无关（只要 thr_high 还在合理量程内），
+        # 正好补上 M5 事故暴露的那个结构盲区。
+        if name == "ladder":
+            m_all, _ = ref_grad(img, W, H)
+            r0, r1 = 8, H - 6                 # 内部行：躲开帧首暂态与底部边界口径
+            nrow = r1 - r0
+            bad_line = bad_weak = 0
+            print("  ΔY 阶梯规格（竖边界；出边行数 = 在边界 ±2 列内有 edge 的行数 / 总行数）")
+            for dy, c0 in ladder_bands(W, H):
+                for cb in (c0, c0 + LADDER_STRIPE):     # 竖条左右两条边界
+                    if not (6 <= cb <= W - 8):          # 贴边的档位只查内侧那条
+                        continue
+                    m8 = max(m_all[H // 2][c] >> 3
+                             for c in range(max(0, cb - 2), min(W, cb + 2)))
+                    hits, run, best = 0, 0, 0
+                    for r in range(r0, r1):
+                        hit = any(0 <= r - dr < H and 0 <= c - dc < W
+                                  and dut_edge[r - dr][c - dc]
+                                  for c in range(cb - 2, cb + 2))
+                        if hit:
+                            hits += 1
+                            run += 1
+                            best = max(best, run)
+                        else:
+                            run = 0
+                    print("    ΔY=%3d  参考 mag8=%3d  边界列 %2d  出边 %2d/%2d 行  最长连续 %d"
+                          % (dy, m8, cb, hits, nrow, best))
+                    if dy >= 128 and hits != nrow:
+                        bad_line += 1
+                        print("      !! FAIL: ΔY=%d（mag8=%d）足够大，整条边界都该有边，缺 %d 行"
+                              % (dy, m8, nrow - hits))
+                    if dy <= 32 and best >= 3:
+                        bad_weak += 1
+                        print("      !! FAIL: ΔY=%d（mag8=%d）太小，不该连成一条边线" % (dy, m8))
+            if bad_line or bad_weak:
+                fails += 1
 
         # 单像素宽度：阶跃图样沿垂直方向扫描，量边缘像素的连续段长度
         if name.startswith("step"):

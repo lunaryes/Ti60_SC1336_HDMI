@@ -75,16 +75,90 @@ rgb_i[23:0] ──► rgb_to_gray ──► pix_window_3x3 ──┬──► ca
 
 目标总占用不超过 Ti60F225 的 70%，由集成阶段持续跟踪。
 
-**实测（2026-10-10，Efinity 2026.1 `efx_map`，工程含全部外设）**：
+### 实测（2026-10-15，Efinity 2026.1 `efx_map`，工程含全部外设；M5 落定后的最新一次）
 
-| 模块 | FF | LUT | RAM |
+器件合计（map 日志的 Resource Summary，两次同一口径，可直接相减）：
+
+| 资源 | M4（含 `canny_edge`，10-13 日志） | M5（本次） | M5 增量 |
 | --- | --- | --- | --- |
-| `u_pix_window_3x3` | 128 | 149 | 6 × EFX_RAM10 |
-| `u_image_pipeline`（整条流水线） | 294 | 243 | 6 × EFX_RAM10 |
+| `EFX_FF` | 3859 | 3979 | **+120** |
+| `EFX_LUT4` | 4680 | 4913 | **+233** |
+| `EFX_ADD` | 1221 | 1221 | 0 |
+| `EFX_SRL8` | 578 | 594 | +16 |
+| `EFX_RAM10` | 66 | 66 | **0** |
+| `EFX_DSP24` / `EFX_DSP48` | 3 / 1 | 3 / 1 | 0 |
 
-> 上表是**接 `sobel_edge`（4 拍）**时的基线。换成 `canny_edge`（12 拍）后的实测
-> 待 M5 综合归档：预估 FF +200 左右、LUT 与 Sobel 同量级再多几百、RAM 由
-> 6 块 EFX_RAM10 增到 14 块左右（§2 的两级窗口各 4 块），DSP 仍为 0。
+M5 的 +120 FF / +233 LUT 就是 `mag8_o`/`cls_o`、4 种调试视图（含 14×8 的 Y 延迟链）和
+`uart_cmd` 的全部代价，预案估的是"合计 < 200 FF"，实际 120。**RAM 一块没多。**
+
+**M6（2026-10-15，AWB 的 R/B 增益改成运行时寄存器）** —— 同一口径，可与上表直接相减：
+
+| 资源 | M5 | **M6** | 增量 |
+| --- | --- | --- | --- |
+| `EFX_FF` | 3979 | 4004 | **+25** |
+| `EFX_LUT4` | 4913 | 4932 | +19 |
+| `EFX_ADD` | 1221 | 1212 | −9 |
+| `EFX_SRL8` | 594 | 594 | 0 |
+| `EFX_RAM10` | 66 | 66 | 0 |
+| `EFX_DSP24` | 3 | **5** | **+2** |
+| `EFX_DSP48` | 1 | 本次报告未列出（记 0） | — |
+
++2 个 DSP 是 `example_top.v` 里 AWB 的两个增益从**常数乘法**（`* 409`）变成**变量乘法**（8×8）——
+这是"现场调白平衡"必须付的代价。`u_uart_cmd` 由 79 FF 涨到 **96 FF**（两个 8 位增益寄存器 +
+`tx_idx` 由 2 位扩到 3 位），`u_image_pipeline` 709 FF（+2，边界优化抖动，非功能变化）。
+
+分子树（`python3 sim/count_map.py outflow/Ti60_Demo.map.v`，数 post-map 网表的实例路径）：
+
+| 子树（实例路径） | FF | ADD | SRL8 | RAM10 | DSP |
+| --- | --- | --- | --- | --- | --- |
+| `u_image_pipeline`（整条流水线） | 707 | 298 | 67 | 16 | 3 |
+| ├ `u_canny_edge` | 494 | 257 | 3 | 10 | 0 |
+| ├ `u_pix_window_3x3` | 63 | 0 | 0 | 6 | 0 |
+| ├ `u_rgb_to_gray` | 0 | 31 | 0 | 0 | 3 |
+| └ `u_image_mix` | 11 | 10 | 0 | 0 | 0 |
+| `u_uart_cmd`（顶层，不在流水线内） | 79 | 0 | 0 | 0 | 0 |
+
+三条读表须知（都是这次实测撞出来的，不写下来下次还会撞）：
+
+1. **"每个模块用了多少 LUT"从 post-map 网表里数不出来，别浪费时间**：优化会把组合逻辑
+   改写成合成名（`LUT__12345`、`CutToMuxOpt_*`），**丢掉层次路径**。实测路径保留率
+   FF/ADD/RAM10 = 100%，LUT4 = **0.2%**。所以分模块表里没有 LUT 列。
+2. **网表数和日志数不能混用**：网表里只有 1817 个 FF，而日志说 3979 —— 硬核/IP 内部的
+   单元没有展开进网表。比"这次改了多少"用日志，比"哪个模块贵"用网表。
+3. Canny 的代价集中在两级新增窗口：`u_canny_edge` 自己 494 FF + 10 块 RAM10，
+   流水线的 RAM10 由 6（只有 3×3 窗口）涨到 16 —— 与 §2 的预算一致。
+
+> **本节原有的一行 2026-10-10 实测已撤掉**（`u_pix_window_3x3` 128 FF / 149 LUT / 6 RAM10，
+> `u_image_pipeline` 294 FF / 243 LUT / 6 RAM10）。撤掉的原因：其中 RAM10 = 6 与本次一致，
+> 但 **FF/LUT 两列用现在的方法复现不出来**（本次 `u_pix_window_3x3` 是 63 FF），当时的统计
+> 口径已无从考证；留着会和可复现的数字打架，历史值看 git。
+> 连带地，"接 Sobel 时 294 FF、换 Canny 预估 +200"这类推断也不再引用 —— 看上面的实测增量。
+
+**重跑方法**（工程里**没有**现成的综合脚本，`work_syn/` 是工具产物、随时会被清掉）：
+
+```bat
+:: 必须先 call setup.bat，否则 efx_map 启动即 EXCEPTION_ACCESS_VIOLATION（见 §6）
+call C:\Efinity\2026.1\bin\setup.bat
+efx_map --project Ti60_Demo --root example_top --device Ti60F225 --family Titanium ^
+        --prj <工程目录>\Ti60_Demo.xml --work-dir <工程目录>\work_syn ^
+        --output-dir <工程目录>\outflow --write-efx-verilog <…>\outflow\Ti60_Demo.map.v ^
+        --write-premap-module <…>\outflow\Ti60_Demo.elab.vdb ^
+        --binary-db <…>\outflow\Ti60_Demo.vdb ^
+        --veri_option "verilog_mode=verilog_2k,vhdl_mode=vhdl_2008" ^
+        --I <工程目录> --I <工程目录>\ip\<每个 IP 子目录，共 11 个>
+```
+
+### M5 调试可观测性的增量（预估 → 实测）
+
+| 改动 | 预估 | 实测 |
+| --- | --- | --- |
+| `canny_edge` 加 `mag8_o` / `cls_o` | +10 FF／级（S11、S12 各一组），LUT 可忽略 | 含在 `u_canny_edge` 的 494 FF 里 |
+| 4 种调试视图（Y 延迟链 14×8 + 24 bit 4:1 mux） | 112 FF + ≈50 LUT | 见上表器件增量 |
+| `uart_cmd`（新建） | ≈100~150 LUT + 数十 FF，无 RAM/无 DSP | **79 FF**、0 RAM、0 DSP（`u_uart_cmd` 行） |
+| **合计** | < 200 FF | **+120 FF / +233 LUT / +16 SRL8 / +0 RAM** |
+
+代价是：`view_i != 0` 时边缘支路不再输出二值边缘图，且这些新增口/视图**只在调试时有意义**；
+量很小（+120 FF ≈ 全器件 3%），不值得做编译期开关。
 
 改 BRAM 版之前，`u_pix_window_3x3` 是 20605 FF + 17377 LUT + 0 RAM —— 两行缓存用
 异步读写成寄存器数组，推断不出 BRAM，占掉全器件约 1/4 的逻辑。**行缓存必须用
@@ -102,10 +176,15 @@ image_pipeline_top #(
 ) u_image_pipeline (
     .clk_i  (clk_pixel), .rst_ni (rst_n),
     .vsync_i(vs_de_from_awb), .de_i(de_from_awb), .rgb_i(rgb_from_awb),
-    .thr_i  (thr),            .mode_i(mode),
+    .thr_i  (r_img_thr),      .mode_i(r_img_mode), .view_i(r_img_view),
     .vsync_o(vs_to_crop),     .de_o  (de_to_crop), .rgb_o(rgb_to_crop)
 );
 ```
+
+M5 起 `thr` / `mode` / `view` 三个口不是 localparam 而是**带复位值的寄存器**，复位值 =
+`IMG_THR_DEF / IMG_MODE_DEF / IMG_VIEW_DEF`，运行时由 `src/common/uart_cmd.v`（串口命令口）
+改写 —— 现场调阈值不用重新综合。串口口与流水线同域（`clk_pixel`），**不接数据通路**，
+详见 `INTERFACE.md` §7。
 
 - 加**旁路 MUX**：`mode_i = 0` 时输出必须与基线逐像素一致，用于回归对比。
 - hsync 也要按同一 `IMG_LAT` 延迟后再送 `FrameBoundCrop`（`r_hs_dly` 用 `IMG_LAT`
@@ -117,6 +196,11 @@ image_pipeline_top #(
 | 陷阱 | 说明 |
 | --- | --- |
 | `src/axi4_ctrl.v` 有两个版本 | 工程编译的是 `src/axi/axi4_ctrl.v`（15868 B，参数化）。根下 `src/axi4_ctrl.v`（16483 B）未被引用，改它不会有任何效果 |
-| `src/` 里有文件不在工程里 | 2026-10-13 复核：`src/` 共 37 个 `.v`，`Ti60_Demo.xml` 引用 33 个；未引用的 4 个是 `src/axi4_ctrl.v`（重复件）、`src/axi/axi4_ctrl_tb.v`、`src/dsi/dsi_init_tb.v`、`src/isp/VIP_RAW8_RGB888_TMPL.v`（后三个是 testbench/模板）。新加的 RTL 必须同时挂进 `Ti60_Demo.xml`，否则"改了 src 里文件但板上无变化"（`canny_edge.v` 已挂上） |
+| `src/` 里有文件不在工程里 | 2026-10-15 复核：`src/` 共 38 个 `.v`，`Ti60_Demo.xml` 引用 34 个（另加根目录的 `example_top.v`）；未引用的 4 个是 `src/axi4_ctrl.v`（重复件）、`src/axi/axi4_ctrl_tb.v`、`src/dsi/dsi_init_tb.v`、`src/isp/VIP_RAW8_RGB888_TMPL.v`（后三个是 testbench/模板）。新加的 RTL 必须同时挂进 `Ti60_Demo.xml`，否则"改了 src 里文件但板上无变化"（`canny_edge.v`、`uart_cmd.v` 都已挂上） |
 | `.pt.sdc` 是生成的 | 文件头写明 `# Efinity Interface Designer SDC`，点一次 Generate 就覆盖 |
 | `src/isp/` 两个模块是活链路 | 见 `README.md` 铁律第 1 条 |
+| **`canny_edge` 的 thr 口可用量程只有 0..96** | 判据域 `mag8 = mag>>3` 是按 2040 折算 0..255 的，但 3×3 高斯把 Sobel 的 4A 阶跃响应压成 3A，满对比度横竖边的 `mag` 只有 768。把 thr 当 "n/255" 会高估 2.7 倍（M5 事故根因：默认值 40 = 要求 42% 对比度）。标尺表见 `CANNY_PLAN.md` §3.8 与 `canny_edge.v` 头注释 |
+| **`mag_o` 在 `mag8 > 32` 就饱和，不能用来调阈值** | `mag_o = min(mag,255)`，而 `mag8 > 32 ⟺ mag > 255`。thr=16 → mag=128 还看得见，thr=40 → mag=320 就是纯白一片。**量阈值要用 `view_i = 1`（`mag8` 图）**，它显示 `min(mag8<<1,255)` |
+| **`uart_rx_i` / `uart_tx_o` 早已布线但从未被引用** | `example_top.v` 声明、`Ti60_Demo.peri.xml` 分配（`GPIOT_N_16`/`GPIOT_P_16`），全工程此前没有任何 RTL 用它。M5 的 `src/common/uart_cmd.v` 是第一个用户；板上要接 USB-UART 桥（TTL 侧） |
+| **`efx_*` 必须先 `call setup.bat`** | 缺 `EFINITY_HOME`/`PATH` 时 `efx_map` 在打印 banner 之后直接 `EXCEPTION_ACCESS_VIOLATION reading memory at (nil)` 段错误 —— **看着像 RTL/工程有问题，其实是环境问题**（试过 `--help`、干净环境、cmd 启动都不是原因）。正确姿势：`cmd /c "call C:\Efinity\2026.1\bin\setup.bat && <efx 命令>"`。重跑综合的完整命令行见 §4 |
+| **`start.cmd` 已过期** | 它写死 `c:\efinity\2022.2\bin\efx_run.bat`（本机装的是 2026.1），并且**开头就 `rm -rf outflow work_pnr work_pt work_syn`** —— 直接跑会删掉现有的综合/布局布线产物。要用它先把版本号改对，并想清楚要不要删 |

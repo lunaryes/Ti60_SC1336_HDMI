@@ -6,7 +6,7 @@
 
 ## 1. 仓库布局
 
-```
+```text
 07-1_Ti60_SC1336_HDMI_1280720/          ← 仓库根（git 从这一层开始跟踪）
 ├── Ti60F225_SC1336_HDMI_Display/       ← Efinity 工程（基线，尽量只读）
 │   ├── example_top.v                   ← 唯一顶层模块【集成负责人独占】
@@ -21,11 +21,20 @@
 │       ├── image/                      ← 【新增】图像算法模块
 │       └── display/                    ← 【新增】显示合成模块
 ├── docs/                               ← 架构与接口文档
+└── sim/                                ← Verilator 回归（Verilator + Python 参考模型）
+    ├── run.sh                          ← 唯一入口：bash sim/run.sh [图样名...]
+    ├── canny_ref.py                    ← 参考模型 + 图样 + 逐像素比对
+    ├── color_probe.py                  ← 离线探针：AWB→灰度→梯度→mag8 标尺与色卡判决
+    ├── count_map.py                    ← 从综合网表统计各子系统资源（`docs/ARCH.md` §4 的数据来源）
+    ├── tb_canny_edge.v                 ← canny_edge 算法回归
+    ├── tb_pipeline_top.v               ← 顶层集成回归（延迟/vsync/旁路/四种视图）
+    ├── tb_rgb_to_gray.v                ← 灰度链颜色路径回归
+    ├── tb_uart_cmd.v                   ← 串口命令口回归（真实参数 74.25MHz/460800）
+    └── mut_uart.py                     ← 串口台的变异测试（手动跑，确认它真的会 FAIL）
 ```
 
 `work_syn/` `work_pnr/` `work_pt/` `ooc/` `outflow/` `ip/*/ipm/` `ip/*/Testbench/` `ip/*/*_devkit/`
 都是工具构建产物，已被 `.gitignore` 排除，本地存在但不入库。
-
 
 ## tips
 
@@ -36,3 +45,21 @@
 3. **`example_top.v` 与 `Ti60_Demo.xml` 是集成负责人独占**，其他人不要动。
 4. **算法流水线全部放在 `clk_pixel` 单时钟域内**，不得引入新的跨时钟域路径。
 5. **`src/axi/axi4_ctrl.v` 才是被编译的那一份**；`src/axi4_ctrl.v`（同名模块的旧版）不在工程中，改它不会有任何效果。
+6. **改了 RTL 就跑回归**：`bash sim/run.sh`（Verilator + Python 参考模型，四段：13 个图样算法比对 /
+   13 个图样顶层集成 / 灰度链颜色路径 / 串口命令口，64×32 约 1 分钟）。它在 WSL 里跑，
+   需要 `verilator >= 5.0` 和 `python3`。
+   只跑某几个图样：`bash sim/run.sh lines noise`；跑真实分辨率：`IMG_W=1280 IMG_H=720 bash sim/run.sh`
+   （约 10 分钟，Python 参考模型是瓶颈）。
+   **不要同时开两个 run.sh**：`sim/build/` 是共享工作目录，会互相覆盖激励，症状是
+   `$readmem file address beyond bounds` 之类完全指错方向的报错。脚本用锁目录会直接拒绝并发。
+7. **Canny 的阈值口刻度不是 0..255，有效量程只有 0..96**（横竖边）。默认 12（要求 ΔY ≥ 32 ≈ 满幅 13%；
+   2026-10-15 上板扫出来的工作点，之前是 16），
+   **不要超过 48**。调参、排查"边缘出不来"之前先看 `docs/CANNY_PLAN.md` §3.8 的标尺表，
+   或直接跑 `python3 sim/color_probe.py`。板上可以用串口运行时改阈值（`docs/INTERFACE.md` §7）。
+   **串口是二进制协议，不是文本**：设 `thr=16` 要发十六进制 `54 10`，发成 `T 16` 会被吃掉参数里的
+   空格（`0x20`=32）而静默改成 32 —— 空格字节表现成"命令发出去了但没生效"。字节表见 `INTERFACE.md`
+   §7，**每发一条参数命令跟一个 `52` 回读核对**（回包 6 字节：`thr view mode gain_r gain_b '\n'`）。
+8. **AWB 增益也是运行时可调的**（`41 XX` = R 增益、`42 XX` = B 增益，`byte/64`）：现场"白墙发青"
+   = 相机链路 R 偏低，对着白墙/白纸把 R 调到中性即可，不用改常数重新综合。
+   复位默认 **112/96 = ×1.75/×1.5**，其中 ×1.75 是 2026-10-15 上板对白墙二分调出来的中性点
+   （老的写死值是 ×1.59，偏青）。

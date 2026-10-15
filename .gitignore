@@ -84,6 +84,7 @@ debug_profile.wizard.json
 
 # ---------- 编辑器 / IDE ----------
 .vscode/
+.claude/
 .idea/
 
 # ---------- 系统文件 ----------

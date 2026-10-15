@@ -26,6 +26,21 @@ IMG_H=${IMG_H:-32}
 mkdir -p "$BUILD"
 
 #---------------------------------------------------------------------
+# 0) 串行保护：sim/build 是**共享的可变工作目录**（激励、DUT 输出、编译产物
+#    全在里面），两个 run.sh 同时跑会互相覆盖 stim_*.hex。症状极具迷惑性：
+#    尺寸不同的那一路报 `$readmem file address beyond bounds`（大图样被小
+#    图样覆盖），看起来像激励生成器坏了、像 RTL 越界，唯独不像"并发"。
+#    用 mkdir 做原子锁（比 flock 可移植）。
+#---------------------------------------------------------------------
+LOCK="$BUILD/.lock"
+if ! mkdir "$LOCK" 2>/dev/null; then
+    echo "!! 另一个 sim/run.sh 正在跑（锁目录 $LOCK 已存在）。"
+    echo "   sim/build 不能并发使用，等它跑完；确认没有在跑就 rm -rf $LOCK"
+    exit 1
+fi
+trap 'rmdir "$LOCK" 2>/dev/null || true' EXIT
+
+#---------------------------------------------------------------------
 # 1) canny_edge 算法回归（Verilator + Python 参考模型逐像素比对）
 #---------------------------------------------------------------------
 verilator --binary --timing -Wno-fatal -Wno-lint \
@@ -72,3 +87,25 @@ for s in "${STS[@]}"; do
 done
 echo "顶层集成（tb_pipeline_top）：$npass 个图样通过，$nfail 个失败"
 [ "$nfail" -eq 0 ] || exit 1
+
+#---------------------------------------------------------------------
+# 3) 灰度链颜色路径（M5）：定点点值 + BT.601 容差 + 消隐清零
+#    集成回归灌的是 {g,g,g}，颜色路径在那里从未被激励过（见 tb_rgb_to_gray.v）
+#---------------------------------------------------------------------
+verilator --binary --timing -Wno-fatal -Wno-lint \
+    --top-module tb_rgb_to_gray \
+    "$SRC/rgb_to_gray.v" sim/tb_rgb_to_gray.v \
+    -o Vtb_rgb_to_gray --Mdir "$BUILD/obj_gray"
+
+"$BUILD/obj_gray/Vtb_rgb_to_gray"
+
+#---------------------------------------------------------------------
+# 4) 串口命令口（M5）：协议 + 分频 + 帧解析。用真实参数（74.25MHz/460800）
+#    这是全工程唯一"上板后没法用波形排查"的新逻辑，先在仿真里跑通协议。
+#---------------------------------------------------------------------
+verilator --binary --timing -Wno-fatal -Wno-lint \
+    --top-module tb_uart_cmd \
+    "$SRC/../common/uart_cmd.v" sim/tb_uart_cmd.v \
+    -o Vtb_uart_cmd --Mdir "$BUILD/obj_uart"
+
+"$BUILD/obj_uart/Vtb_uart_cmd"

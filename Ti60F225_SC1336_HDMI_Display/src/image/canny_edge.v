@@ -35,6 +35,25 @@
 //   edge   = strong || (weak && 8 邻域内含 strong)  ← 单遍滞后（§3.7，非递归）
 //   系数 2 全部用左移一位（位拼接）实现，无乘法器、不占 DSP。
 //
+// ★★ 阈值口的量程（M5 标定事故的结论，调阈值前必读）★★
+//   mag8 = mag>>3 是按理论满量程 2040 折算 0..255 的，但 3x3 高斯把 Sobel 的 4A
+//   阶跃响应压成 **3A**，所以横竖边实际能达到的最大 mag 只有 768 ——
+//   **mag8 的有效量程是 0..96（横竖边）/ 0..140（对角边），不是 0..255**。
+//   把 thr_high 当成 "n/255 的对比度" 会系统性高估 2.7 倍。反查标尺：
+//
+//     thr        8    16    20    24    32    40    48
+//     需要ΔY≥   21    42    53    63    85   106   127   （横竖边，ΔY = 边界两侧灰度差）
+//     占满幅     8%   16%   21%   25%   33%   42%   50%
+//
+//   ★ 这几个数是 sim/color_probe.py 用本文件的定点算子**实算**出来的（含 >>4 截断），
+//     不是解析式 3·ΔY/8 的估算 —— 后者会整体偏大 1（调阈值时 1 个 LSB 就要命）。
+//     自动生成的完整表：python3 sim/color_probe.py
+//
+//   原来的默认值 40 实际要求 42% 的对比度 —— 这就是"只有高对比度才出边"的根因：
+//   饱和红(Y≈99)/紫(≈90)/品红(≈105) 上的黑字边只有 mag8 37/33/39，全部落在
+//   [thr_low, thr_high) 的弱带里，而单遍滞后只把强边集膨胀 1 像素，于是整条丢光。
+//   经验约束：thr_high 不要超过 48（≈ 有效量程的一半），超过等于关掉边缘检测。
+//
 // 【流水线】LATENCY = 12 拍，vsync/de 用同深度移位寄存器对齐，
 //   与 mag_o / edge_o 严格同拍：
 //     S1  高斯             1
@@ -103,7 +122,24 @@ module canny_edge #(
     output reg         vsync_o,
     output reg         de_o,
     output reg  [7:0]  mag_o,
-    output reg         edge_o
+    output reg         edge_o,
+
+    //-----------------------------------------------------------------
+    // 调试观测口（M5 新增，排查"只认高对比度"问题时加的）
+    //   mag8_o：真实的阈值域 mag8 = mag>>3（未饱和，0..255），与 mag_o 同拍同像素。
+    //     ★ 为什么要它：mag_o 是 min(mag,255)，而 mag8 = mag>>3 ⇒ mag_o 在 mag8 > 32
+    //       就饱和了。thr_high 的默认值域在 16~48，对应的 mag = 128~384，**阈值平面
+    //       落在 mag_o 的显示动态范围之外**——用 mag_o 图调阈值从根上不成立
+    //       （33 和 96 在屏幕上是同一个纯白）。mag8_o 把这一级信息补回来。
+    //   cls_o：判决分类，一次判死"故障出在阈值还是在逻辑"：
+    //     00 = mag8 <  thr_low                      —— 无响应（该处真的没有梯度）
+    //     01 = mag8 >= thr_low 但 NMS 没过          —— 有梯度、被非极大值抑制掉了
+    //     10 = 过 NMS 且 thr_low <= mag8 < thr_high —— 弱边（滞回要连的那一类）
+    //     11 = 过 NMS 且 mag8 >= thr_high           —— 强边
+    //     cls_o = 10/11 而 edge_o = 0 ⇔ 逻辑/接线 bug；cls_o = 00 ⇔ 阈值再低也没用。
+    //-----------------------------------------------------------------
+    output reg  [7:0]  mag8_o,
+    output reg  [1:0]  cls_o
 );
 
     //-----------------------------------------------------------------
@@ -389,18 +425,31 @@ module canny_edge #(
 
     wire edge_c = strong_c || (weak_c && nb_strong);
 
+    // 调试判决分类（口径见文件头 cls_o）。按优先级串写而不是 {strong, weak}：
+    // 方案 §3.7 允许 thr_low > thr_high（退化成单阈值），那时 strong ⊆ weak，
+    // 直接拼位会把强边错报成弱边。
+    wire [1:0] cls_c = strong_c              ? 2'b11 :
+                       weak_c                ? 2'b10 :
+                       (mag8_c >= thr_low_i) ? 2'b01 : 2'b00;
+
     reg [11:0] mag_s11;
+    reg [7:0]  mag8_s11;
+    reg [1:0]  cls_s11;
     reg        edge_s11;
     reg        vsync_s11, de_s11;
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             mag_s11   <= 12'd0;
+            mag8_s11  <= 8'd0;
+            cls_s11   <= 2'b00;
             edge_s11  <= 1'b0;
             vsync_s11 <= 1'b0;
             de_s11    <= 1'b0;
         end else begin
             mag_s11   <= mag_c;
+            mag8_s11  <= mag8_c;
+            cls_s11   <= cls_c;
             edge_s11  <= edge_c;
             vsync_s11 <= mwin_vs;
             de_s11    <= mwin_de;
@@ -423,11 +472,16 @@ module canny_edge #(
             de_o    <= 1'b0;
             mag_o   <= 8'd0;
             edge_o  <= 1'b0;
+            mag8_o  <= 8'd0;
+            cls_o   <= 2'b00;
         end else begin
             vsync_o <= vsync_s11;
             de_o    <= de_s11;
             mag_o   <= de_s11 ? mag_sat : 8'd0;
             edge_o  <= de_s11 & edge_s11;
+            // 调试口与 mag_o/edge_o 同一口径：de = 0 的区段一律出 0
+            mag8_o  <= de_s11 ? mag8_s11 : 8'd0;
+            cls_o   <= de_s11 ? cls_s11  : 2'b00;
         end
     end
 

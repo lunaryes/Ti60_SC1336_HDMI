@@ -46,16 +46,23 @@
 //
 // 【thr_i】顶层只保留一个 8bit 阈值口（接口 I-A 不变、example_top 不改这个口），
 //   内部映射成 Canny 的双阈值：thr_high = thr_i、thr_low = thr_i >> 1（经典
-//   Canny 的 2:1，thr_i 默认 40 时即 40/20，与仿真台/参考模型一致）。
+//   Canny 的 2:1；thr_i 默认 16 时即 16/8，与仿真台/参考模型一致）。
 //   判据域是 canny_edge 内部的 mag8 = mag >> 3（**不是** sobel 那种"先饱和到
 //   255 再比"），所以这个口的刻度与 sobel_edge 的 thr_i 不可直接换算。
-//   要单独调低阈值，得改这里，或给 I-A 加第二个端口（那就要动 example_top）。
+//   ★★ 这个口的有效量程只有 0..96（横竖边）/ 0..140（对角边），不是 0..255 ——
+//      把 thr 当成 "n/255 的对比度" 会高估 2.7 倍。原来的默认值 40 实际要求
+//      **满幅 42% 的对比度**，这就是"只有高对比度才出边"的根因（M5 事故）。
+//      完整的标尺表见 canny_edge.v 头注释；经验值 16（≈17% 对比度）。
+//   要单独调阈值/视图，改 example_top 里的寄存器（默认走 UART 可运行时调）。
+//
+// 【view_i】边缘支路显示什么（M5 新增，默认 0 = 原来的二值边缘图）：
+//   0 二值边缘图 / 1 mag8 灰度图 / 2 四类假彩图 / 3 Y 灰度图。
+//   详细口径见下方第 4 节的注释。view_i 只影响边缘支路的像素内容，**不影响
+//   延迟**（四种视图的组合路径都在 image_mix 之前，由 image_mix 统一寄存）。
 //=====================================================================
 module image_pipeline_top #(
     parameter IMG_W       = 1280,
     parameter IMG_H       = 720,
-    parameter EDGE_BINARY = 1,       // 1 = 二值边缘图（白线黑底，thr 直观可见）
-                                     // 0 = 梯度幅值灰度图（{mag,mag,mag}）
     parameter LATENCY     = 16       // 对外延迟（拍），与上面的推导一致
 )(
     input  wire        clk_i,        // clk_pixel
@@ -63,8 +70,9 @@ module image_pipeline_top #(
     input  wire        vsync_i,      // 帧有效电平
     input  wire        de_i,         // 像素有效
     input  wire [23:0] rgb_i,        // {R[7:0], G[7:0], B[7:0]}
-    input  wire [7:0]  thr_i,        // 默认 40
+    input  wire [7:0]  thr_i,        // 默认 16（原 40 太高，见 canny_edge.v 头注释）
     input  wire [1:0]  mode_i,       // 含义见 image_mix（0 原图 / 1 边缘 / 2、3 分屏）
+    input  wire [1:0]  view_i,       // 边缘支路显示什么，见下方【view_i】
     output wire        vsync_o,
     output wire        de_o,
     output wire [23:0] rgb_o
@@ -133,7 +141,8 @@ module image_pipeline_top #(
     //    分支 / 图样。
     //-----------------------------------------------------------------
     wire        can_vs, can_de;
-    wire [7:0]  can_mag;
+    wire [7:0]  can_mag8;             // 真实阈值域 mag8（未饱和），调试用
+    wire [1:0]  can_cls;              // 判决分类：00/01/10/11，调试用
     wire        can_edge;
 
     // 单一阈值口 → 双阈值（2:1），见文件头的【thr_i】
@@ -157,15 +166,59 @@ module image_pipeline_top #(
 
         .vsync_o (can_vs),
         .de_o    (can_de),
-        .mag_o   (can_mag),
-        .edge_o  (can_edge)
+        // mag_o 的 min(mag,255) 口径在显示上已被 mag8_o 取代 —— 它在 mag8>32 就
+        // 饱和，没法用来调阈值（见 canny_edge.v 的 mag8_o 注释）。端口保留是为了
+        // 不破坏已冻结的 I-B 语义与 sobel 的视觉对照，这里不再往外引。
+        .mag_o   (),
+        .edge_o  (can_edge),
+        .mag8_o  (can_mag8),
+        .cls_o   (can_cls)
     );
 
     //-----------------------------------------------------------------
-    // 4) 边缘图（与 can_de / can_mag / can_edge 同拍）
+    // 4) 边缘支路显示内容，由 view_i 选（与 can_de / can_mag / can_edge 同拍）
+    //    0 = 二值边缘图（白线黑底）——工程默认
+    //    1 = mag8 灰度图，显示值 = min(mag8<<1, 255)
+    //        阈值面直接可读：thr=16 落在灰度 32、thr=40 落在 80，满对比度黑边
+    //        （mag8=96）落在 192。**不能拿 mag_o 调阈值**——它在 mag8>32 就饱和
+    //        （见 canny_edge.v 的 mag8_o 注释）。
+    //    2 = 四类假彩图（"判死器"）：
+    //          黑  = 无响应（mag8 < thr_low，该处真的没梯度）
+    //          深红 = 有梯度但被 NMS 抑制
+    //          蓝  = 弱边（过 NMS，未过强阈值）
+    //          白  = 强边
+    //    3 = Y 灰度图（算法眼里的世界）。用来量 ΔY：屏幕上读出两侧灰度差，
+    //        查 canny_edge.v 头注释的标尺表就知道该不该出边。
+    //        ★ y_dly 只做时间对齐（14 拍），不做空间对齐，所以本视图比边缘图
+    //          高 3 行（正是已知的整体下移量），量对比度不受影响。
     //-----------------------------------------------------------------
-    wire [23:0] edge_rgb = EDGE_BINARY ? (can_edge ? 24'hFFFFFF : 24'h000000)
-                                       : {can_mag, can_mag, can_mag};
+    wire [8:0] mag8x2      = {1'b0, can_mag8} << 1;
+    wire [7:0] mag8_view   = mag8x2[8] ? 8'hFF : mag8x2[7:0];
+
+    wire [23:0] cls_rgb = (can_cls == 2'b11) ? 24'hFFFFFF :   // 强边  白
+                          (can_cls == 2'b10) ? 24'h0000FF :   // 弱边  蓝
+                          (can_cls == 2'b01) ? 24'h800000 :   // NMS 抑制 深红
+                                               24'h000000;    // 无响应 黑
+
+    reg [7:0] y_dly [0:ORIG_LAT-2];    // gray_y 再延 ORIG_LAT-1 = 14 拍，
+                                       // 与 orig_dly[ORIG_LAT-1] 同拍
+    integer j;
+    always @(posedge clk_i or negedge rst_ni) begin
+        if (!rst_ni) begin
+            for (j = 0; j < ORIG_LAT-1; j = j + 1)
+                y_dly[j] <= 8'd0;
+        end else begin
+            y_dly[0] <= gray_y;
+            for (j = 1; j < ORIG_LAT-1; j = j + 1)
+                y_dly[j] <= y_dly[j-1];
+        end
+    end
+
+    wire [23:0] edge_rgb = (view_i == 2'd1) ? {mag8_view, mag8_view, mag8_view} :
+                           (view_i == 2'd2) ? cls_rgb :
+                           (view_i == 2'd3) ? {y_dly[ORIG_LAT-2], y_dly[ORIG_LAT-2],
+                                               y_dly[ORIG_LAT-2]} :
+                                              (can_edge ? 24'hFFFFFF : 24'h000000);
 
     //-----------------------------------------------------------------
     // 5) 原图延迟 ORIG_LAT 拍（纯寄存器，无行缓存，保证 mode 0 逐像素一致）
