@@ -42,6 +42,7 @@
         <efx:design_file name="src/image/image_pipeline_top.v" version="default" library="default"/>
         <efx:design_file name="src/display/image_mix.v" version="default" library="default"/>
         <efx:design_file name="src/common/uart_cmd.v" version="default" library="default"/>
+        <efx:design_file name="src/control/canny_threshold_key_ctrl.v" version="default" library="default"/>
         <efx:top_vhdl_arch name=""/>
         <efx:msg_config name=""/>
         <efx:partition_definitions name=""/>

@@ -243,6 +243,16 @@ module example_top
 	
 	
 	////////////////////////////////////////////////////////////////
+	//	User Buttons —— Canny 阈值现场调节
+	//	1.8 V LVCMOS，外部 10k 上拉、按下为 0；K3 = CRESET_N 不可用。
+	//	★ 2026-10-16：GPIOL_P_02 / GPIOL_N_02 原分给 lcd_de_o / lcd_pclk_o，但这两个
+	//	  LCD 端口在本设计里从未被驱动（lcd_pclk_o 的端口声明本身就是注释掉的），
+	//	  而显示走 HDMI，所以把这两个脚改分给按键（Ti60_Demo.peri.xml 同步改）。
+	input 		 	key1_i,				//	K1 = CSI = GPIOL_P_02 -> Canny 阈值 +
+	input 		 	key2_i,				//	K2 = CSO = GPIOL_N_02 -> Canny 阈值 -
+
+
+	////////////////////////////////////////////////////////////////
 	//	UART Interface
 	input 		 	uart_rx_i,			//	Support 460800-8-N-1. 
 	output 		 	uart_tx_o, 
@@ -1126,30 +1136,41 @@ localparam IMG_THR_DEF  = 8'd12; // Canny 强边阈值（内部 mag8 = mag>>3 �
                                  //    （这个口不是 0..255 量程），是"只有高对比度才出边"的根因；
                                  //    2026-10-15 上板扫出来的最佳工作点是 12（除最暗的紫/灰外全部
                                  //    检出、且没有多余细线），所以复位值落 12。完整的反查标尺见
-                                 //    canny_edge.v 头注释；板上仍可用 'T' 命令随时改。
+                                 //    canny_edge.v 头注释。
+                                 //    ★ 2026-10-16：这个值现在是**按键控制器的复位值**
+                                 //      （K1 加 / K2 减，步长 4，范围 4..48），上板后不插串口、
+                                 //      不重综合就能改；见下面的 canny_threshold_key_ctrl 例化。
                                  //    ★ 若以后把采集端修好（AWB/曝光/换打印纸卡），可以再抬回 16。
 localparam IMG_LAT      = 16;    // = image_pipeline_top 的 LATENCY，两处必须一致
 
 wire                                    pipe_vs                    ;
 wire                                    pipe_de                    ;
 wire                   [  23:0]         pipe_rgb                   ;
-wire                   [   7:0]         r_img_thr                  ;
+wire                   [   7:0]         w_img_thr                  ;
 wire                   [   1:0]         r_img_mode                 ;
 wire                   [   1:0]         r_img_view                 ;
 
 //---------------------------------------------------------------------
-// 串口命令接口：把 thr / mode / view 从编译期常量变成运行时寄存器，
-// 现场调参不用重新综合。uart_rx_i / uart_tx_o 早已声明并在
-// Ti60_Demo.peri.xml 里分配了引脚（GPIOT_N_16 / GPIOT_P_16），此前全工程
-// 从未引用。跑在 clk_pixel 域，与流水线同域，不需要 CDC。
-// 命令格式（2 字节帧：命令 + 参数）：'T'<thr> 'V'<view> 'M'<mode>，'A'<AWB R 增益>，
+// 串口命令接口：把 view / mode 从编译期常量变成运行时寄存器，现场调参不用
+// 重新综合。uart_rx_i / uart_tx_o 早已声明并在 Ti60_Demo.peri.xml 里分配了
+// 引脚（GPIOT_N_16 / GPIOT_P_16），此前全工程从未引用。跑在 clk_pixel 域，
+// 与流水线同域，不需要 CDC。
+// 命令格式（2 字节帧：命令 + 参数）：'V'<view> 'M'<mode>，'A'<AWB R 增益>，
 // 'B'<AWB B 增益>，'R' 回读 6 字节 {thr, view, mode, gain_r, gain_b, '\n'}。
 // 详见 src/common/uart_cmd.v。
+//
+// ★ 2026-10-16：**阈值不再走串口**。thr_o 从这里断开，改由下面的按键控制器
+//   （canny_threshold_key_ctrl）单独产生，现场调阈值不用插串口。因此：
+//   · 'T'<byte> 仍会写进 uart_cmd 内部那个寄存器（协议不变，但**不再影响画面**）；
+//   · 'R' 回读的第 1 个字节就是那个寄存器，**不等于**当前生效阈值（按键改过就不等了）；
+//   · view / mode / AWB 增益三路不受影响，回读仍然可靠。
+//   要恢复串口调阈值：把 thr_o 接到 canny_threshold_key_ctrl 的 uart_thr_i，再给
+//   uart_thr_valid_i 一个 "'T' 写入" 的单拍脉冲（该模块已带这条通路，串口写优先于按键）。
 //---------------------------------------------------------------------
 uart_cmd #(
     .CLK_FREQ (74250000),        // clk_pixel
     .BAUD     (460800),
-    .THR_DEF  (IMG_THR_DEF),
+    .THR_DEF  (IMG_THR_DEF),     // 现在只影响 'R' 回读的第 1 个字节（见上）
     .VIEW_DEF (IMG_VIEW_DEF),
     .MODE_DEF (IMG_MODE_DEF)
 ) u_uart_cmd (
@@ -1158,12 +1179,38 @@ uart_cmd #(
     .rx_i   (uart_rx_i                 ),
     .tx_o   (uart_tx_o                 ),
 
-    .thr_o  (r_img_thr                 ),
+    .thr_o  (                          ),   // ★ 不再接流水线：阈值 = 按键（见下）
     .view_o (r_img_view                ),
     .mode_o (r_img_mode                ),
 
     .gain_r_o (r_awb_gain              ),   // AWB R 增益（1/64 定点，复位 102 ≈ ×1.59）
     .gain_b_o (b_awb_gain              )    // AWB B 增益（复位 96 = ×1.50）
+);
+
+//---------------------------------------------------------------------
+// Canny 阈值按键控制（K1 / K2）—— 阈值的**唯一来源**
+//   模块自带 2FF 同步 + 20 ms 消抖 + 按下沿事件 + 步进/饱和，全在 clk_pixel 域，
+//   与流水线同域。K1 加、K2 减，步长 4，范围 4..48（IMG_THR_DEF 是复位值）。
+//   按住不放不会连续步进；不按则阈值保持不变，所以静态画面与改动前一致。
+//---------------------------------------------------------------------
+canny_threshold_key_ctrl #(
+    .CLK_FREQ_HZ (74250000),     // clk_pixel
+    .DEBOUNCE_MS (20),
+    .THR_DEFAULT (IMG_THR_DEF),
+    .THR_MIN     (8'd4),
+    .THR_MAX     (8'd48),
+    .THR_STEP    (8'd4)
+) u_canny_thr_key (
+    .clk   (clk_pixel                  ),
+    .rst_n (rstn_pixel                 ),
+
+    .key_data          ({key2_i, key1_i}),   // [0] = K1 加 / [1] = K2 减
+    .uart_thr_valid_i  (1'b0           ),    // 保留端口，不接串口（见上）
+    .uart_thr_i        (8'd0           ),
+
+    .threshold_o       (w_img_thr      ),    // -> image_pipeline_top.thr_i
+    .threshold_low_o   (               ),    // 流水线内部自己算 thr_low = thr_i >> 1
+    .key_press_o       (               )     // 单拍按下脉冲：只在板上用 ILA 才看得到
 );
 
 image_pipeline_top #(.IMG_W(1280),.IMG_H(720),.LATENCY(IMG_LAT)) u_image_pipeline(
@@ -1173,7 +1220,7 @@ image_pipeline_top #(.IMG_W(1280),.IMG_H(720),.LATENCY(IMG_LAT)) u_image_pipelin
     .vsync_i                           (w_rgb_vsync               ),
     .de_i                              (w_rgb_href                ),
     .rgb_i                             ({w_rgb_r, w_rgb_g, w_rgb_b}),
-    .thr_i                             (r_img_thr                 ),
+    .thr_i                             (w_img_thr                 ),
     .mode_i                            (r_img_mode                ),
     .view_i                            (r_img_view                ),
 
