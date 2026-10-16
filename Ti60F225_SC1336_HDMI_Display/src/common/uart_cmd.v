@@ -61,16 +61,26 @@ module uart_cmd #(
     parameter [7:0]   GAIN_R_DEF = 8'd112,   // 1/64 定点：112/64 = ×1.75（**上板实测定的**：
                                              // 2026-10-15 对白墙二分，×1.59 偏青、×2.0 偏暖、
                                              // ×1.75 中性。改前写死的是 409/256 ≈ ×1.59）
-    parameter [7:0]   GAIN_B_DEF = 8'd96     // 96/64 = ×1.5（= 原 384/256）
+    parameter [7:0]   GAIN_B_DEF = 8'd96,
+    parameter [1:0]   SMOOTH_DEF = 2'd1
 )(
     input  wire       clk,
     input  wire       rst_n,
     input  wire       rx_i,      // 空闲为高
     output wire       tx_o,
 
+    // Threshold actually feeding Canny; used by the R status reply.
+    input  wire [7:0] thr_read_i,
+    // Smoothing mode actually feeding Canny; may be changed by board K1.
+    input  wire [1:0] smooth_read_i,
     output reg  [7:0] thr_o,
+    // One-clock pulse when a complete T<byte> command is accepted.
+    output reg        thr_valid_o,
     output reg  [1:0] view_o,
     output reg  [1:0] mode_o,
+    output reg  [1:0] smooth_o,
+    // One-clock pulse when a complete S<byte> command is accepted.
+    output reg        smooth_valid_o,
     // AWB 增益（1/64 定点）。默认 = 复位值 = 原 example_top 里写死的常数，
     // 所以"不插串口"和"插了不用"两种情况下画面与改动前逐像素一致。
     output reg  [7:0] gain_r_o,
@@ -158,48 +168,61 @@ module uart_cmd #(
     // 2) 命令解析：2 字节帧，未知字符直接丢
     //-----------------------------------------------------------------
     localparam [7:0] C_T = 8'h54, C_V = 8'h56, C_M = 8'h4D, C_R = 8'h52,
-                     C_A = 8'h41, C_B = 8'h42;
+                     C_A = 8'h41, C_B = 8'h42, C_S = 8'h53;
 
     reg       p_wait;                 // 正在等参数字节
     reg [7:0] p_cmd;
     reg       tx_req;
-    reg [7:0] tx_d [0:5];             // 回包 6 字节 {thr, view, mode, gain_r, gain_b, '\n'}
+    reg [7:0] tx_d [0:6];             // {thr, view, mode, smooth, gain_r, gain_b, '\n'}
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             thr_o    <= THR_DEF;
             view_o   <= VIEW_DEF;
             mode_o   <= MODE_DEF;
+            smooth_o <= SMOOTH_DEF;
             gain_r_o <= GAIN_R_DEF;
             gain_b_o <= GAIN_B_DEF;
+            thr_valid_o <= 1'b0;
+            smooth_valid_o <= 1'b0;
             p_wait   <= 1'b0;
             p_cmd    <= 8'd0;
             tx_req   <= 1'b0;
         end else begin
             tx_req <= 1'b0;
+            thr_valid_o <= 1'b0;
+            smooth_valid_o <= 1'b0;
             if (rx_valid) begin
                 if (!p_wait) begin
                     case (rx_byte)
-                        C_T, C_V, C_M, C_A, C_B: begin
+                        C_T, C_V, C_M, C_A, C_B, C_S: begin
                             p_cmd  <= rx_byte;
                             p_wait <= 1'b1;
                         end
                         C_R: begin
-                            tx_d[0] <= thr_o;
+                            tx_d[0] <= thr_read_i;
                             tx_d[1] <= {6'b0, view_o};
                             tx_d[2] <= {6'b0, mode_o};
                             tx_d[3] <= gain_r_o;         // 回读里带上增益：
                             tx_d[4] <= gain_b_o;         // 调完不用再猜"到底生效没有"
-                            tx_d[5] <= 8'h0A;            // '\n'
+                            tx_d[5] <= {6'b0, smooth_read_i};
+                            tx_d[6] <= 8'h0A;
                             tx_req  <= 1'b1;
                         end
                         default: ;                        // 忽略（回车/换行/空格）
                     endcase
                 end else begin
                     case (p_cmd)
-                        C_T:     thr_o    <= rx_byte;
+                        C_T: begin
+                            thr_o       <= rx_byte;
+                            thr_valid_o <= 1'b1;
+                        end
                         C_V:     view_o   <= rx_byte[1:0];
                         C_M:     mode_o   <= rx_byte[1:0];
+                        C_S: begin
+                            smooth_o       <= (rx_byte[1:0] > 2'd2) ? 2'd2 : rx_byte[1:0];
+                            smooth_valid_o <= 1'b1;
+                        end
                         C_A:     gain_r_o <= rx_byte;
                         C_B:     gain_b_o <= rx_byte;
                         default: ;
@@ -211,7 +234,7 @@ module uart_cmd #(
     end
 
     //-----------------------------------------------------------------
-    // 3) 发送：'R' 的 6 字节回包。忙时来的新请求会被丢掉（调试口，可接受）
+    // 3) 发送：'R' 的 7 字节回包。忙时来的新请求会被丢掉（调试口，可接受）
     //-----------------------------------------------------------------
     localparam [1:0] T_IDLE = 2'd0, T_START = 2'd1, T_DATA = 2'd2, T_STOP = 2'd3;
 
@@ -219,7 +242,7 @@ module uart_cmd #(
     reg [CW-1:0] tx_cnt;
     reg [2:0]    tx_bidx;
     reg [7:0]    tx_sh;
-    reg [2:0]    tx_idx;                               // 0..5，回包 6 字节
+    reg [2:0]    tx_idx;                               // 0..6，回包 7 字节
     reg          tx_line;
 
     always @(posedge clk or negedge rst_n) begin
@@ -266,8 +289,8 @@ module uart_cmd #(
                 T_STOP: begin
                     tx_line <= 1'b1;
                     if (tx_cnt == 0) begin
-                        if (tx_idx == 3'd5) begin
-                            tx_state <= T_IDLE;            // 6 字节发完
+                        if (tx_idx == 3'd6) begin
+                            tx_state <= T_IDLE;            // 7 字节发完
                         end else begin
                             tx_idx   <= tx_idx + 1'b1;
                             tx_sh    <= tx_d[tx_idx + 1'b1];

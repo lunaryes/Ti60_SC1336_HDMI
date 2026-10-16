@@ -248,8 +248,8 @@ module example_top
 	//	★ 2026-10-16：GPIOL_P_02 / GPIOL_N_02 原分给 lcd_de_o / lcd_pclk_o，但这两个
 	//	  LCD 端口在本设计里从未被驱动（lcd_pclk_o 的端口声明本身就是注释掉的），
 	//	  而显示走 HDMI，所以把这两个脚改分给按键（Ti60_Demo.peri.xml 同步改）。
-	input 		 	key1_i,				//	K1 = CSI = GPIOL_P_02 -> Canny 阈值 +
-	input 		 	key2_i,				//	K2 = CSO = GPIOL_N_02 -> Canny 阈值 -
+	input 		 	key1_i,				//	K1 = CSI = GPIOL_P_02 -> 平滑模式循环
+	input 		 	key2_i,				//	K2 = CSO = GPIOL_N_02 -> Canny 阈值循环
 
 
 	////////////////////////////////////////////////////////////////
@@ -1128,8 +1128,10 @@ assign w_rgb_b = (w_rgb_b_mult >= 16'd16384) ? 8'hFF : w_rgb_b_sc[7:0];
 // Image pipeline : rgb_to_gray -> pix_window_3x3 -> canny_edge -> image_mix
 // 插入点：AWB 之后、FrameBoundCrop 之前（docs/ARCH.md §1），全部在 clk_pixel 单域
 // =========================================================================================================================================
-localparam IMG_MODE_DEF = 2'd3;  // 0=原图 1=边缘图 2=分屏(左原图+右边缘) 3=画中画(暂等同分屏)
-localparam IMG_VIEW_DEF = 2'd0;  // 0=二值边缘图 1=mag8 图 2=四类假彩图 3=Y 图
+// Diagnostic branch boots into a visually unique full-screen Canny state map.
+// This makes it obvious that the newly built bitstream is actually running.
+localparam IMG_MODE_DEF = 2'd1;  // 0=原图 1=边缘图 2=分屏(左原图+右边缘) 3=画中画(暂等同分屏)
+localparam IMG_VIEW_DEF = 2'd2;  // 0=二值边缘图 1=mag8 图 2=五状态假彩图 3=Y 图
                                  // （四种视图的口径见 image_pipeline_top 的【view_i】）
 localparam IMG_THR_DEF  = 8'd12; // Canny 强边阈值（内部 mag8 = mag>>3 域，弱边 = 该值/2）
                                  // ★★ 从 40 → 16 → 12：原值 40 实际要求满幅 **42%** 的对比度
@@ -1147,8 +1149,13 @@ wire                                    pipe_vs                    ;
 wire                                    pipe_de                    ;
 wire                   [  23:0]         pipe_rgb                   ;
 wire                   [   7:0]         w_img_thr                  ;
+wire                   [   7:0]         r_uart_thr                 ;
+wire                                    r_uart_thr_valid           ;
 wire                   [   1:0]         r_img_mode                 ;
 wire                   [   1:0]         r_img_view                 ;
+wire                   [   1:0]         r_smooth_mode              ;
+wire                                    r_smooth_valid             ;
+wire                   [   1:0]         w_smooth_mode              ;
 
 //---------------------------------------------------------------------
 // 串口命令接口：把 view / mode 从编译期常量变成运行时寄存器，现场调参不用
@@ -1169,7 +1176,7 @@ wire                   [   1:0]         r_img_view                 ;
 //---------------------------------------------------------------------
 uart_cmd #(
     .CLK_FREQ (74250000),        // clk_pixel
-    .BAUD     (460800),
+    .BAUD     (115200),          // 诊断阶段降低速率，提高 USB-UART 链路裕量
     .THR_DEF  (IMG_THR_DEF),     // 现在只影响 'R' 回读的第 1 个字节（见上）
     .VIEW_DEF (IMG_VIEW_DEF),
     .MODE_DEF (IMG_MODE_DEF)
@@ -1179,9 +1186,14 @@ uart_cmd #(
     .rx_i   (uart_rx_i                 ),
     .tx_o   (uart_tx_o                 ),
 
-    .thr_o  (                          ),   // ★ 不再接流水线：阈值 = 按键（见下）
+    .thr_read_i (w_img_thr             ),
+    .smooth_read_i (w_smooth_mode      ),
+    .thr_o  (r_uart_thr                ),
+    .thr_valid_o (r_uart_thr_valid     ),
     .view_o (r_img_view                ),
     .mode_o (r_img_mode                ),
+    .smooth_o (r_smooth_mode           ),
+    .smooth_valid_o (r_smooth_valid    ),
 
     .gain_r_o (r_awb_gain              ),   // AWB R 增益（1/64 定点，复位 102 ≈ ×1.59）
     .gain_b_o (b_awb_gain              )    // AWB B 增益（复位 96 = ×1.50）
@@ -1205,11 +1217,14 @@ canny_threshold_key_ctrl #(
     .rst_n (rstn_pixel                 ),
 
     .key_data          ({key2_i, key1_i}),   // [0] = K1 加 / [1] = K2 减
-    .uart_thr_valid_i  (1'b0           ),    // 保留端口，不接串口（见上）
-    .uart_thr_i        (8'd0           ),
+    .uart_thr_valid_i  (r_uart_thr_valid),
+    .uart_thr_i        (r_uart_thr     ),
+    .uart_smooth_valid_i (r_smooth_valid),
+    .uart_smooth_i     (r_smooth_mode  ),
 
     .threshold_o       (w_img_thr      ),    // -> image_pipeline_top.thr_i
     .threshold_low_o   (               ),    // 流水线内部自己算 thr_low = thr_i >> 1
+    .smooth_mode_o     (w_smooth_mode  ),
     .key_press_o       (               )     // 单拍按下脉冲：只在板上用 ILA 才看得到
 );
 
@@ -1223,6 +1238,7 @@ image_pipeline_top #(.IMG_W(1280),.IMG_H(720),.LATENCY(IMG_LAT)) u_image_pipelin
     .thr_i                             (w_img_thr                 ),
     .mode_i                            (r_img_mode                ),
     .view_i                            (r_img_view                ),
+    .smooth_mode_i                     (w_smooth_mode             ),
 
     .vsync_o                           (pipe_vs                   ),
     .de_o                              (pipe_de                   ),

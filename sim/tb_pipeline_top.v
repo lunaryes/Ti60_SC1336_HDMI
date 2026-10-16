@@ -141,6 +141,7 @@ module tb_pipeline_top;
         .clk_i (clk), .rst_ni (rst_n),
         .vsync_i (src_vs), .de_i (src_de), .rgb_i (src_rgb),
         .thr_i (THR_HIGH), .mode_i (mode), .view_i (view),
+        .smooth_mode_i (2'd0),
         .vsync_o (bin_vs), .de_o (bin_de), .rgb_o (bin_rgb)
     );
 
@@ -183,6 +184,7 @@ module tb_pipeline_top;
         .p21 (rp21), .p22 (rp22), .p23 (rp23),
         .p31 (rp31), .p32 (rp32), .p33 (rp33),
         .thr_high_i (THR_HIGH), .thr_low_i (THR_LOW),
+        .smooth_mode_i (2'd0),
         .vsync_o (ref_vs), .de_o (ref_de),
         .mag_o (ref_mag), .edge_o (ref_edge),
         .mag8_o (ref_mag8), .cls_o (ref_cls)
@@ -194,7 +196,8 @@ module tb_pipeline_top;
     wire [8:0]  ref_mag8x2  = {1'b0, ref_mag8} << 1;
     wire [7:0]  ref_mag8v   = ref_mag8x2[8] ? 8'hFF : ref_mag8x2[7:0];
     wire [23:0] ref_cls_rgb = (ref_cls == 2'b11) ? 24'hFFFFFF :
-                              (ref_cls == 2'b10) ? 24'h0000FF :
+                              (ref_cls == 2'b10) ?
+                                  (ref_edge ? 24'h0000FF : 24'hFFFF00) :
                               (ref_cls == 2'b01) ? 24'h800000 : 24'h000000;
 
     reg [23:0] ref_edge_rgb = 24'h000000;

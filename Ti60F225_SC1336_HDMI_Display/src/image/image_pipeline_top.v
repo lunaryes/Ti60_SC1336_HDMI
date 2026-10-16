@@ -73,6 +73,7 @@ module image_pipeline_top #(
     input  wire [7:0]  thr_i,        // 默认 16（原 40 太高，见 canny_edge.v 头注释）
     input  wire [1:0]  mode_i,       // 含义见 image_mix（0 原图 / 1 边缘 / 2、3 分屏）
     input  wire [1:0]  view_i,       // 边缘支路显示什么，见下方【view_i】
+    input  wire [1:0]  smooth_mode_i,// 0 标准高斯 / 1 弱平滑 / 2 完全旁路
     output wire        vsync_o,
     output wire        de_o,
     output wire [23:0] rgb_o
@@ -163,6 +164,7 @@ module image_pipeline_top #(
         .p31     (p31), .p32 (p32), .p33 (p33),
         .thr_high_i (thr_high),
         .thr_low_i  (thr_low),
+        .smooth_mode_i (smooth_mode_i),
 
         .vsync_o (can_vs),
         .de_o    (can_de),
@@ -195,10 +197,13 @@ module image_pipeline_top #(
     wire [8:0] mag8x2      = {1'b0, can_mag8} << 1;
     wire [7:0] mag8_view   = mag8x2[8] ? 8'hFF : mag8x2[7:0];
 
-    wire [23:0] cls_rgb = (can_cls == 2'b11) ? 24'hFFFFFF :   // 强边  白
-                          (can_cls == 2'b10) ? 24'h0000FF :   // 弱边  蓝
-                          (can_cls == 2'b01) ? 24'h800000 :   // NMS 抑制 深红
-                                               24'h000000;    // 无响应 黑
+    // Five-state diagnosis:
+    // black=no gradient, red=NMS rejected, yellow=weak/unlinked,
+    // blue=weak/linked by hysteresis, white=strong edge.
+    wire [23:0] cls_rgb = (can_cls == 2'b11) ? 24'hFFFFFF :
+                          (can_cls == 2'b10) ?
+                              (can_edge ? 24'h0000FF : 24'hFFFF00) :
+                          (can_cls == 2'b01) ? 24'h800000 : 24'h000000;
 
     reg [7:0] y_dly [0:ORIG_LAT-2];    // gray_y 再延 ORIG_LAT-1 = 14 拍，
                                        // 与 orig_dly[ORIG_LAT-1] 同拍

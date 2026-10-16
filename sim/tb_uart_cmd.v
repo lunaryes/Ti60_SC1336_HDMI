@@ -35,7 +35,8 @@ module tb_uart_cmd;
     reg         rx = 1'b1;          // 空闲为高
     wire        tx;
     wire [7:0]  thr_o;
-    wire [1:0]  view_o, mode_o;
+    wire        thr_valid_o, smooth_valid_o;
+    wire [1:0]  view_o, mode_o, smooth_o;
     wire [7:0]  gain_r_o, gain_b_o;   // AWB 增益（1/64 定点）
 
     uart_cmd #(
@@ -48,7 +49,10 @@ module tb_uart_cmd;
     ) u_dut (
         .clk (clk), .rst_n (rst_n),
         .rx_i (rx), .tx_o (tx),
-        .thr_o (thr_o), .view_o (view_o), .mode_o (mode_o),
+        .thr_read_i (thr_o), .smooth_read_i(smooth_o),
+        .thr_o (thr_o), .thr_valid_o (thr_valid_o),
+        .view_o (view_o), .mode_o (mode_o),
+        .smooth_o (smooth_o), .smooth_valid_o(smooth_valid_o),
         .gain_r_o (gain_r_o), .gain_b_o (gain_b_o)
     );
 
@@ -61,7 +65,7 @@ module tb_uart_cmd;
     integer   kk;           // 只给 recv_byte 用
     integer   j;            // 只给调用方的循环用
     reg [7:0] rxb;
-    reg [7:0] rb [0:5];         // 回包 6 字节 {thr, view, mode, gain_r, gain_b, '\n'}
+    reg [7:0] rb [0:6];         // 回包 7 字节，末尾增加 smooth 后再换行
     reg       rx_ok;        // recv_byte 的结果标志
     integer   wt;           // recv_byte 的超时计数
 
@@ -158,6 +162,7 @@ module tb_uart_cmd;
         chk("复位 thr",  thr_o,  8'd12);
         chk("复位 view", {6'b0, view_o}, 8'd0);
         chk("复位 mode", {6'b0, mode_o}, 8'd3);
+        chk("reset smooth", {6'b0, smooth_o}, 8'd1);
         chk("复位 R 增益", gain_r_o, 8'd112);   // ×1.75，上板对白墙调出来的中性点
         chk("复位 B 增益", gain_b_o, 8'd96);    // ×1.5（沿用基线 384/256）
 
@@ -178,6 +183,8 @@ module tb_uart_cmd;
         chk("V 0xFF", {6'b0, view_o}, 8'd3);
         send_byte(8'h4D, 1); send_byte(8'h01, 1);      // 'M' 0x01
         chk("M 0x01", {6'b0, mode_o}, 8'd1);
+        send_byte(8'h53, 1); send_byte(8'h02, 1);      // 'S' 0x02 = bypass
+        chk("S 0x02", {6'b0, smooth_o}, 8'd2);
 
         //--------------------------------------------------------------
         // 4) 干扰字节（回车/换行/空格）必须被忽略，不能当成命令或参数
@@ -201,7 +208,7 @@ module tb_uart_cmd;
         //    当前状态：thr=8、view=3、mode=1，增益还是复位默认 112/96
         //--------------------------------------------------------------
         send_cmd_nostop(8'h52);                         // 'R'
-        for (j = 0; j < 6; j = j + 1) begin
+        for (j = 0; j < 7; j = j + 1) begin
             recv_byte;
             rb[j] = rxb;
             if (!rx_ok) begin
@@ -214,7 +221,8 @@ module tb_uart_cmd;
         chk("回读 mode", rb[2], 8'd1);
         chk("回读 R 增益复位值", rb[3], 8'd112);        // 112/64 = ×1.75（上板调的中性点）
         chk("回读 B 增益复位值", rb[4], 8'd96);         // 96/64 = ×1.5 = 原 384/256
-        chk("回读结尾换行", rb[5], 8'h0A);
+        chk("readback smooth", rb[5], 8'd2);
+        chk("readback newline", rb[6], 8'h0A);
 
         //--------------------------------------------------------------
         // 7) AWB 增益 'A'/'B'（1/64 定点，量程 0..3.98×）
@@ -250,7 +258,7 @@ module tb_uart_cmd;
         send_byte(8'h41, 1); send_byte(8'hC8, 1);      // 'A' 0xC8 = 200 → ×3.125
         send_byte(8'h42, 1); send_byte(8'h50, 1);      // 'B' 0x50 =  80 → ×1.25
         send_cmd_nostop(8'h52);
-        for (j = 0; j < 6; j = j + 1) begin
+        for (j = 0; j < 7; j = j + 1) begin
             recv_byte;
             rb[j] = rxb;
             if (!rx_ok) begin
@@ -260,7 +268,8 @@ module tb_uart_cmd;
         end
         chk("回读改后的 R 增益", rb[3], 8'd200);
         chk("回读改后的 B 增益", rb[4], 8'd80);
-        chk("回读改后仍以换行结尾", rb[5], 8'h0A);
+        chk("second readback smooth", rb[5], 8'd2);
+        chk("second readback newline", rb[6], 8'h0A);
 
         //--------------------------------------------------------------
         if (nerr == 0)

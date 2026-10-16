@@ -136,6 +136,7 @@ module tb_canny_edge;
         .p31 (p31), .p32 (p32), .p33 (p33),
         .thr_high_i (THR_HIGH[7:0]),
         .thr_low_i  (THR_LOW[7:0]),
+        .smooth_mode_i (2'd0),
         .vsync_o (canny_vs),
         .de_o    (canny_de),
         .mag_o   (canny_mag),

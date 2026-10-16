@@ -1,14 +1,14 @@
 `timescale 1ns / 1ps
 
-// Runtime threshold controller for the Canny pipeline on VF-Ti60F225.
+// Runtime key controller for the Canny pipeline on VF-Ti60F225.
 //
 // This module directly accepts the board's two raw, active-low pushbuttons
 // and contains the complete synchronizer, debounce, press-event generation,
 // and threshold update logic.  No external key_filter instance is required.
 //
 // VF-Ti60F225 button assignment (1.8 V LVCMOS):
-//   key_data[0] = K1 = CSI = GPIOL_P_02 -> increase threshold
-//   key_data[1] = K2 = CSO = GPIOL_N_02 -> decrease threshold
+//   key_data[0] = K1 = CSI = GPIOL_P_02 -> cycle smoothing mode 0/1/2
+//   key_data[1] = K2 = CSO = GPIOL_N_02 -> cycle threshold MIN..MAX
 // Both nets have 10 kOhm pull-ups and are connected to GND when pressed.
 // K3 is CRESET_N and must not be used for threshold adjustment.
 //
@@ -42,9 +42,12 @@ module canny_threshold_key_ctrl #(
     // one clk when uart_thr_i is valid.  UART has priority over the buttons.
     input  wire       uart_thr_valid_i,
     input  wire [7:0] uart_thr_i,
+    input  wire       uart_smooth_valid_i,
+    input  wire [1:0] uart_smooth_i,
 
     output reg  [7:0] threshold_o,
     output wire [7:0] threshold_low_o,
+    output reg  [1:0] smooth_mode_o,
 
     // Optional observation port: one-clock pulses, bit order matches key_data.
     output wire [1:0] key_press_o
@@ -93,7 +96,7 @@ module canny_threshold_key_ctrl #(
             // Default low makes each accepted press exactly one clock long.
             key_press <= 2'b00;
 
-            // K1 / key_data[0]: threshold increase.
+            // K1 / key_data[0]: smoothing-mode selection.
             if (key_sync[0] == key_stable[0]) begin
                 key0_cnt <= {CNT_W{1'b0}};
             end else if (key0_cnt == CNT_LIMIT) begin
@@ -105,7 +108,7 @@ module canny_threshold_key_ctrl #(
                 key0_cnt <= key0_cnt + 1'b1;
             end
 
-            // K2 / key_data[1]: threshold decrease.
+            // K2 / key_data[1]: threshold selection.
             if (key_sync[1] == key_stable[1]) begin
                 key1_cnt <= {CNT_W{1'b0}};
             end else if (key1_cnt == CNT_LIMIT) begin
@@ -123,7 +126,7 @@ module canny_threshold_key_ctrl #(
     assign threshold_low_o = {1'b0, threshold_o[7:1]};
 
     //-----------------------------------------------------------------
-    // 3) Update the effective Canny high threshold.
+    // 3) K2 cycles the effective Canny high threshold.
     //-----------------------------------------------------------------
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -134,35 +137,33 @@ module canny_threshold_key_ctrl #(
             // on the next key press.
             threshold_o <= uart_thr_i;
         end else begin
-            case ({key_press[0], key_press[1]})
-                2'b10: begin
-                    // Higher threshold: fewer edges and stronger noise
-                    // rejection.  Saturate instead of wrapping at 8'hff.
-                    if (threshold_o >= THR_MAX)
-                        threshold_o <= THR_MAX;
-                    else if (threshold_o >= THR_MAX - THR_STEP)
-                        threshold_o <= THR_MAX;
-                    else
-                        threshold_o <= threshold_o + THR_STEP;
-                end
+            // Sequence: 4,8,...,48,4,... with the current parameters.
+            // An arbitrary UART value joins the sequence on the next K2 press.
+            if (key_press[1]) begin
+                if ((threshold_o < THR_MIN) ||
+                    (threshold_o >= THR_MAX) ||
+                    (threshold_o > THR_MAX - THR_STEP))
+                    threshold_o <= THR_MIN;
+                else
+                    threshold_o <= threshold_o + THR_STEP;
+            end
+        end
+    end
 
-                2'b01: begin
-                    // Lower threshold: more weak/low-contrast edges.  If UART
-                    // previously selected a value above the key range, first
-                    // return to THR_MAX; then continue stepping downward.
-                    if (threshold_o > THR_MAX)
-                        threshold_o <= THR_MAX;
-                    else if (threshold_o <= THR_MIN)
-                        threshold_o <= THR_MIN;
-                    else if (threshold_o <= THR_MIN + THR_STEP)
-                        threshold_o <= THR_MIN;
-                    else
-                        threshold_o <= threshold_o - THR_STEP;
-                end
-
-                // Ignore simultaneous presses; otherwise hold the setting.
-                default: threshold_o <= threshold_o;
-            endcase
+    //-----------------------------------------------------------------
+    // 4) K1 cycles the smoothing mode: standard -> weak -> bypass.
+    // UART S<byte> remains available and has priority over the button.
+    //-----------------------------------------------------------------
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            smooth_mode_o <= 2'd1;
+        end else if (uart_smooth_valid_i) begin
+            smooth_mode_o <= (uart_smooth_i > 2'd2) ? 2'd2 : uart_smooth_i;
+        end else if (key_press[0]) begin
+            if (smooth_mode_o >= 2'd2)
+                smooth_mode_o <= 2'd0;
+            else
+                smooth_mode_o <= smooth_mode_o + 1'b1;
         end
     end
 
