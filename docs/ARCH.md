@@ -37,19 +37,24 @@ CMOS_Capture_RAW_Gray ──► Sensor_Image_XYCrop ──► ddr_rw_ctrl
 ## 2. 新增流水线内部结构
 
 ```
-rgb_i[23:0] ──► rgb_to_gray ──► pix_window_3x3 ──┬──► canny_edge ──► mag/edge
-                                                 │                       │
-                                                 └──► (可选) 中值滤波 ───┘
-                                                                         ▼
-                                                              mode 选择 / 着色 / 旁路 MUX
+rgb_i[23:0] ──► rgb_to_gray ──► pix_window_3x3 ──► median_filter_3x3 ──┐
+                                                                       ▼
+                                                            pix_window_3x3 ──► canny_edge ──► mag/edge
+                                                                                                    │
+                                                                     mode 选择 / 着色 / 旁路 MUX ◄──┘
                                                                          │
                                                                    image_mix
                                                                          ▼
                                                             rgb_o[23:0] ──► FrameBoundCrop
 ```
 
-`pix_window_3x3` 只例化一次，边缘检测（原 Sobel → 现 `canny_edge`）与中值
-**共享同一组 9 个像素**（并行消费），所以中值滤波器不需要额外 BRAM。
+中值滤波**串在 Canny 之前**（2026-10-17 接入）：`median_filter_3x3` 吃前级
+`pix_window_3x3` 的 9 个像素、输出**一个**中值像素，而 Canny 需要中值后的 3×3
+邻域，所以中值之后必须再例化一级 `pix_window_3x3`。代价是**多一组行缓存
+（3 × 1280 × 8 bit，实测 6 块 RAM10 —— 每个 1280 深的 bank 要 2 块 1024 深
+RAM10，3 个 bank 共 6 块）和多 3 拍延迟**（中值 1 + 后级窗口 2）。
+早期的"中值与 Canny 并行、共享 9 像素、零额外 BRAM"方案只能让中值作用于
+显示，救不了 Canny 的噪声，已废弃。
 
 `canny_edge` 内部比 `sobel_edge` 多两级 3×3 窗口，需要自己的行历史：
 
@@ -60,6 +65,11 @@ rgb_i[23:0] ──► rgb_to_gray ──► pix_window_3x3 ──┬──► ca
 
 两级都是"同步读 + 预测读地址（发 col+1）"的 SDP 写法（§6 的坑）。
 
+Canny 前置高斯有**三档运行时模式**（2026-10-17 从 `debug_canny_hardware_diagnosis`
+分支合入）：`0` 标准 1:2:1 高斯、`1` 弱平滑 `(p22 + 高斯)/2`、`2` 完全旁路。
+`canny_edge` 在 `vsync_i` 上升沿锁存模式，避免切换落在帧中间；三档走同一组
+流水寄存器，**延迟不变（12 拍）**，代价只有几个 2:1/3:1 MUX。
+
 ## 3. 时钟域
 
 全部在 `clk_pixel`（74.25 MHz）单域。详见 `INTERFACE.md` §2。
@@ -68,7 +78,8 @@ rgb_i[23:0] ──► rgb_to_gray ──► pix_window_3x3 ──┬──► ca
 
 | 资源 | 预估占用 | 说明 |
 | --- | --- | --- |
-| 行缓存 BRAM | 3 × 1280 × 8 bit ≈ 30 kbit | `pix_window_3x3` 的 3 个行 bank，按行轮转、1 写 2 读 |
+| 行缓存 BRAM | 3 × 1280 × 8 bit ≈ 30 kbit | 第一级 `pix_window_3x3`（中值输入），按行轮转、1 写 2 读 |
+| 行缓存 BRAM（中值后新增） | 3 × 1280 × 8 bit ≈ 30 kbit | 第二级 `pix_window_3x3`（Canny 输入），2026-10-17 加中值后需要 |
 | 行缓存 BRAM（Canny 新增） | 2 × 1280 × 8 + 2 × 1280 × 14 ≈ 56 kbit | 高斯场窗口 + 梯度场窗口，各 2 个 bank（见 §2） |
 | 乘法器 / DSP | 3（灰度化）+ 0 | 灰度系数是常数、可用移位加法；Sobel/Canny 的系数 2 与 106 全用移位加法，**不占 DSP** |
 | 逻辑 LUT | 数百~千级 | 边缘检测流水 + 合成；Canny 预估比 Sobel 多 300~600 |
@@ -107,6 +118,28 @@ M5 的 +120 FF / +233 LUT 就是 `mag8_o`/`cls_o`、4 种调试视图（含 14×
 这是"现场调白平衡"必须付的代价。`u_uart_cmd` 由 79 FF 涨到 **96 FF**（两个 8 位增益寄存器 +
 `tx_idx` 由 2 位扩到 3 位），`u_image_pipeline` 709 FF（+2，边界优化抖动，非功能变化）。
 
+**M6b（2026-10-17，按键阈值控制器 + 片内灰度直方图）** —— 同一口径，与上表直接相减：
+
+| 资源 | M6（10-15） | 本次 | 增量 |
+| --- | --- | --- | --- |
+| `EFX_FF` | 4004 | 4288 | **+284** |
+| `EFX_LUT4` | 4932 | 5401 | +469 |
+| `EFX_ADD` | 1212 | 1315 | +103 |
+| `EFX_SRL8` | 594 | 594 | 0 |
+| `EFX_RAM10` | 66 | 67 | **+1** |
+| `EFX_DSP24` | 5 | 5 | 0 |
+
+10-15 之后新增的是两块独立功能，按 post-map 网表拆开：
+
+- `u_canny_thr_key`（按键阈值控制器）：**50 FF / 47 ADD**；
+- `u_gray_hist`（直方图 + `u_uart_tx`）：**225 FF / 56 ADD / 1 RAM10**；
+- `u_uart_cmd` 96 → **104 FF**（`'H'` 命令 + `tx_busy_o`）；
+- `u_image_pipeline` 709 → **698 FF**（−11，边界优化抖动，非功能变化）。
+
+256×20 bit 的 `hist_mem` 被推断成 **1 块 EFX_RAM10**（`VERI-2571: extracting RAM for
+identifier 'hist_mem'`），比预算的 2 块省一块。`dbg_y/de/vs` 三个抽头是纯组合直连，
+没有引入额外寄存器（流水线 FF 反而少了 11）。
+
 分子树（`python3 sim/count_map.py outflow/Ti60_Demo.map.v`，数 post-map 网表的实例路径）：
 
 | 子树（实例路径） | FF | ADD | SRL8 | RAM10 | DSP |
@@ -133,6 +166,37 @@ M5 的 +120 FF / +233 LUT 就是 `mag8_o`/`cls_o`、4 种调试视图（含 14×
 > 但 **FF/LUT 两列用现在的方法复现不出来**（本次 `u_pix_window_3x3` 是 63 FF），当时的统计
 > 口径已无从考证；留着会和可复现的数字打架，历史值看 git。
 > 连带地，"接 Sobel 时 294 FF、换 Canny 预估 +200"这类推断也不再引用 —— 看上面的实测增量。
+
+**M7（2026-10-17，Canny 前串入 3×3 中值 + UART `'T'` 阈值回接；
+同日合入 `debug_canny_hardware_diagnosis` 的平滑三档、五状态假彩图、分屏左灰度）** —— 同一口径：
+
+| 资源 | M6b | **M7（合并后）** | 增量 |
+| --- | --- | --- | --- |
+| `EFX_FF` | 4288 | 4472 | **+184** |
+| `EFX_LUT4` | 5401 | 6222 | **+821** |
+| `EFX_ADD` | 1315 | 1343 | **+28** |
+| `EFX_SRL8` | 594 | 594 | 0 |
+| `EFX_RAM10` | 67 | 73 | **+6** |
+| `EFX_DSP24` | 5 | 5 | 0 |
+
+- 上表是合入平滑三档、五状态假彩图、分屏左灰度**之后**的 map（2026-10-17 16:33）。
+  相对合并前同一天的 M7 测量（4463 FF / 6141 LUT4 / 1333 ADD），这三项分别
+  **+9 / +81 / +10**；SRL8 / RAM10 / DSP 不变。ADD 的 +10 是弱平滑档的
+  `(p22 + gaussian + 1) >> 1`，LUT 的 +81 主要来自五状态译码和分屏三选一。
+- 第二级 `pix_window_3x3`（`u_pix_window_post_median`，综合截断为
+  `u_pix_window_post_media`）：**62 FF / 6 RAM10**，与第一级（63 FF / 6 RAM10）
+  基本同价；RAM 增量正好是它。
+- `u_median_filter_3x3`：**18 ADD / 0 RAM / 0 DSP**。post-map 里它的输出寄存器
+  被优化成父层网络名（该 bucket 显示 0 FF），**不要据此认为中值没有寄存器**；
+  按器件总量看，FF 的 +184 主要是第二级窗口（+62）、Y 视图延迟链 12→14 拍
+  （+16）和边界优化搬移。
+- LUT **+821** 是这次的大头，来自中值的比较/选择网络、第二级窗口的地址逻辑、
+  平滑三档 MUX 与五状态/分屏显示逻辑；这一项只能由器件总量相减得到，
+  post-map 本次带路径 LUT 保留率 **0%**。
+- 顶层 `u_image_pipeline` 子树 868 FF / 326 ADD / 67 SRL8 / 22 RAM10 / 3 DSP。
+  子模块行（canny 496 / 窗口 63 / 窗口 62 / median 0）**加不出 868**：map 会把
+  端口处的寄存器改成父层网络名（本次 `p11..p33` 占 144 FF、`q11..q33` 占 72 FF）。
+  比"哪个模块贵"看子模块行，比"这次改了多少"看上面的器件总量。
 
 **重跑方法**（工程里**没有**现成的综合脚本，`work_syn/` 是工具产物、随时会被清掉）：
 
@@ -168,7 +232,7 @@ efx_map --project Ti60_Demo --root example_top --device Ti60F225 --family Titani
 
 ```verilog
 // 伪代码，仅供示意；真实信号名以基线代码为准
-localparam IMG_LAT = 16;             // = image_pipeline_top 的 LATENCY，两处必须一致
+localparam IMG_LAT = 19;             // = image_pipeline_top 的 LATENCY，两处必须一致
 image_pipeline_top #(
     .IMG_W (1280),
     .IMG_H (720),
@@ -177,14 +241,19 @@ image_pipeline_top #(
     .clk_i  (clk_pixel), .rst_ni (rst_n),
     .vsync_i(vs_de_from_awb), .de_i(de_from_awb), .rgb_i(rgb_from_awb),
     .thr_i  (r_img_thr),      .mode_i(r_img_mode), .view_i(r_img_view),
+    .smooth_mode_i(r_smooth),
     .vsync_o(vs_to_crop),     .de_o  (de_to_crop), .rgb_o(rgb_to_crop)
 );
 ```
 
 M5 起 `thr` / `mode` / `view` 三个口不是 localparam 而是**带复位值的寄存器**，复位值 =
 `IMG_THR_DEF / IMG_MODE_DEF / IMG_VIEW_DEF`，运行时由 `src/common/uart_cmd.v`（串口命令口）
-改写 —— 现场调阈值不用重新综合。串口口与流水线同域（`clk_pixel`），**不接数据通路**，
-详见 `INTERFACE.md` §7。
+改写 —— 现场调阈值不用重新综合。2026-10-17 起 `'T'`/`'S'` 接回数据通路：
+`uart_cmd.thr_o/thr_valid_o → canny_threshold_key_ctrl.uart_thr_i/uart_thr_valid_i`，
+`smooth_o/smooth_valid_o → uart_smooth_i/uart_smooth_valid_i`。板上 **K1 循环平滑
+（1→2→0）、K2 循环阈值（4..48，步长 1，48 后回 4）**；串口写优先于按键。
+串口口与流水线同域（`clk_pixel`），详见 `INTERFACE.md` §7 与
+`docs/UART_COMMAND_REFERENCE.md`。
 
 - 加**旁路 MUX**：`mode_i = 0` 时输出必须与基线逐像素一致，用于回归对比。
 - hsync 也要按同一 `IMG_LAT` 延迟后再送 `FrameBoundCrop`（`r_hs_dly` 用 `IMG_LAT`
@@ -196,7 +265,7 @@ M5 起 `thr` / `mode` / `view` 三个口不是 localparam 而是**带复位值�
 | 陷阱 | 说明 |
 | --- | --- |
 | `src/axi4_ctrl.v` 有两个版本 | 工程编译的是 `src/axi/axi4_ctrl.v`（15868 B，参数化）。根下 `src/axi4_ctrl.v`（16483 B）未被引用，改它不会有任何效果 |
-| `src/` 里有文件不在工程里 | 2026-10-15 复核：`src/` 共 38 个 `.v`，`Ti60_Demo.xml` 引用 34 个（另加根目录的 `example_top.v`）；未引用的 4 个是 `src/axi4_ctrl.v`（重复件）、`src/axi/axi4_ctrl_tb.v`、`src/dsi/dsi_init_tb.v`、`src/isp/VIP_RAW8_RGB888_TMPL.v`（后三个是 testbench/模板）。新加的 RTL 必须同时挂进 `Ti60_Demo.xml`，否则"改了 src 里文件但板上无变化"（`canny_edge.v`、`uart_cmd.v` 都已挂上） |
+| `src/` 里有文件不在工程里 | 2026-10-17 复核：`src/` 共 43 个 `.v`，`Ti60_Demo.xml` 引用 38 个（另加根目录的 `example_top.v`）；未引用的 5 个是 `src/axi4_ctrl.v`（重复件）、`src/axi/axi4_ctrl_tb.v`、`src/dsi/dsi_init_tb.v`、`src/isp/VIP_RAW8_RGB888_TMPL.v`（后三个是 testbench/模板）和 `src/image/histogram_equalization.v`（2026-10-17 从 `debug_canny_hardware_diagnosis` 合入的备用模块，**尚未例化**，要用时先接进 `image_pipeline_top` 再挂 XML）。新加的 RTL 必须同时挂进 `Ti60_Demo.xml`，否则"改了 src 里文件但板上无变化"（`canny_edge.v`、`uart_cmd.v`、`median_filter_3x3.v` 等都已挂上） |
 | `.pt.sdc` 是生成的 | 文件头写明 `# Efinity Interface Designer SDC`，点一次 Generate 就覆盖 |
 | `src/isp/` 两个模块是活链路 | 见 `README.md` 铁律第 1 条 |
 | **`canny_edge` 的 thr 口可用量程只有 0..96** | 判据域 `mag8 = mag>>3` 是按 2040 折算 0..255 的，但 3×3 高斯把 Sobel 的 4A 阶跃响应压成 3A，满对比度横竖边的 `mag` 只有 768。把 thr 当 "n/255" 会高估 2.7 倍（M5 事故根因：默认值 40 = 要求 42% 对比度）。标尺表见 `CANNY_PLAN.md` §3.8 与 `canny_edge.v` 头注释 |

@@ -7,7 +7,8 @@
 // 本测试台只负责按时序把图像灌进去、把指定帧的输出写出来。
 //
 // 运行方式（见 sim/run.sh）：
-//   ./obj_dir/Vtb_canny_edge +STIM=xxx.hex +OUT=xxx.txt
+//   ./obj_dir/Vtb_canny_edge +STIM=xxx.hex +OUT=xxx.txt [+SMOOTH=0|1|2]
+//   +SMOOTH 对应 canny_edge 的 smooth_mode_i，必须与 canny_ref.py --smooth 同值。
 //
 // 本地检查（不依赖 Python）：
 //   1) 对外延迟：src_de 上升沿 → canny_de 上升沿 必须是 WIN_LAT + LATENCY
@@ -55,9 +56,11 @@ module tb_canny_edge;
     reg [7:0] mem [0:IMG_W*IMG_H-1];
 
     reg [1023:0] stim_f, out_f;
+    integer      smooth_arg = 0;                 // +SMOOTH=0/1/2，与 canny_ref.py --smooth 同步
     initial begin
         if (!$value$plusargs("STIM=%s", stim_f)) stim_f = "stim.hex";
         if (!$value$plusargs("OUT=%s",  out_f))  out_f  = "out.txt";
+        if (!$value$plusargs("SMOOTH=%d", smooth_arg)) smooth_arg = 0;
         $readmemh(stim_f, mem);
     end
 
@@ -136,6 +139,7 @@ module tb_canny_edge;
         .p31 (p31), .p32 (p32), .p33 (p33),
         .thr_high_i (THR_HIGH[7:0]),
         .thr_low_i  (THR_LOW[7:0]),
+        .smooth_mode_i (smooth_arg[1:0]),   // +SMOOTH，默认 0 = 标准 1:2:1 高斯
         .vsync_o (canny_vs),
         .de_o    (canny_de),
         .mag_o   (canny_mag),

@@ -3,12 +3,13 @@
 // Module Name : image_mix
 //
 // 功能:
-//   把原图与边缘图合成为一路 RGB888，四种模式由 mode_i 选择：
+//   把原图、灰度图与边缘图合成为一路 RGB888，四种模式由 mode_i 选择：
 //     mode_i = 0 : 原图
 //     mode_i = 1 : 边缘图
-//     mode_i = 2 : 分屏，左半原图 + 右半边缘图（分界列 IMG_W/2）
+//     mode_i = 2 : 分屏，左半灰度图 + 右半边缘图（分界列 IMG_W/2）
 //     mode_i = 3 : 画中画 —— 暂未实现，当前等同 mode 2（见下方"已知限制"）
-//   两路输入必须逐像素同拍（orig_rgb_i 与 edge_rgb_i 对应同一个像素）。
+//   三路输入必须逐像素同拍（orig/gray/edge 对应同一个像素）。
+//   gray_rgb_i 是 {Y,Y,Y}（中值后的算法灰度），与 edge_rgb_i 同拍。
 //
 // LATENCY = 1（四种模式一致）:
 //   rgb_o 是本模块唯一的输出寄存器，在时钟沿采样"当拍"的组合值，而该组合值直接来自
@@ -19,7 +20,7 @@
 //   · 只处理 de_i = 1 的像素；de_i = 0 时不清零 rgb_o（保持 mode 0 与输入逐像素一致，
 //     供回归对比用），下游 FrameBoundCrop / rgb2dvi 本来就只看 de_o = 1 的像素。
 //   · col_cnt 在 de_i 低电平清零，故 col_cnt 即当前像素的 0 基列号；分界取
-//     col_cnt < IMG_W/2 为原图、否则为边缘图（IMG_W 为奇数时向下取整，左半少 1 列）。
+//     col_cnt < IMG_W/2 为灰度图、否则为边缘图（IMG_W 为奇数时向下取整，左半少 1 列）。
 //   · 本模块没有跨行 / 跨帧状态，复位后第一帧即为有效数据，无预热期。
 //
 // 参数:
@@ -44,6 +45,7 @@ module image_mix #(
     input  wire        vsync_i,
     input  wire        de_i,
     input  wire [23:0] orig_rgb_i,   // 原图，与边缘图同拍
+    input  wire [23:0] gray_rgb_i,   // 灰度图 {Y,Y,Y}，与边缘图同拍
     input  wire [23:0] edge_rgb_i,   // 边缘图
     input  wire [1:0]  mode_i,
     output reg         vsync_o,
@@ -75,7 +77,7 @@ module image_mix #(
     // 输出选择
     //------------------------------------------------------------------
     wire        in_right  = (col_cnt >= HALF_W);                // 右半列
-    wire [23:0] split_rgb = in_right ? edge_rgb_i : orig_rgb_i;
+    wire [23:0] split_rgb = in_right ? edge_rgb_i : gray_rgb_i;
 
     //------------------------------------------------------------------
     // 唯一的输出寄存器：数据与 vsync/de 同块寄存，延迟恒为 1 拍
@@ -91,7 +93,7 @@ module image_mix #(
             case(mode_i)
                 2'd0    : rgb_o <= orig_rgb_i;   // 原图
                 2'd1    : rgb_o <= edge_rgb_i;   // 边缘图
-                2'd2    : rgb_o <= split_rgb;    // 分屏：左半原图 + 右半边缘图
+                2'd2    : rgb_o <= split_rgb;    // 分屏：左半灰度 + 右半边缘图
                 2'd3    : rgb_o <= split_rgb;    // 画中画：暂未实现，临时等同分屏
                 default : rgb_o <= orig_rgb_i;
             endcase

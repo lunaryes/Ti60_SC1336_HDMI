@@ -118,6 +118,7 @@ module canny_edge #(
     input  wire [7:0]  p31, p32, p33,
     input  wire [7:0]  thr_high_i,
     input  wire [7:0]  thr_low_i,
+    input  wire [1:0]  smooth_mode_i, // 0=Gaussian, 1=weak, 2=bypass
 
     output reg         vsync_o,
     output reg         de_o,
@@ -152,7 +153,31 @@ module canny_edge #(
     wire [9:0] gr3 = {1'b0, p31} + {p32, 1'b0} + {1'b0, p33};   // 下行
 
     wire [11:0] gsum = {1'b0, gr1} + {gr2, 1'b0} + {1'b0, gr3}; // 0..4080
-    wire [7:0]  g    = gsum[11:4];                              // >>4
+    wire [7:0]  g_gaussian = gsum[11:4];                         // >>4
+
+    // Apply mode changes only at the start of a frame.  This prevents a
+    // UART command received mid-frame from creating a horizontal seam.
+    reg         vsync_mode_d;
+    reg  [1:0]  smooth_mode_active;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            vsync_mode_d      <= 1'b0;
+            smooth_mode_active <= 2'd0;
+        end else begin
+            vsync_mode_d <= vsync_i;
+            if (vsync_i && !vsync_mode_d)
+                smooth_mode_active <= smooth_mode_i;
+        end
+    end
+
+    // Weak mode blends the centre pixel and Gaussian output 1:1.  The +1
+    // gives round-to-nearest before dividing by two.  All three modes keep
+    // the same S1 register and therefore the same external latency.
+    wire [8:0] g_weak_sum = {1'b0, p22} + {1'b0, g_gaussian} + 9'd1;
+    wire [7:0] g_weak     = g_weak_sum[8:1];
+    wire [7:0] g_selected = (smooth_mode_active == 2'd2) ? p22       :
+                            (smooth_mode_active == 2'd1) ? g_weak    :
+                                                                  g_gaussian;
 
     reg [7:0] g_s1;
     reg       vsync_s1, de_s1;
@@ -163,7 +188,7 @@ module canny_edge #(
             vsync_s1 <= 1'b0;
             de_s1    <= 1'b0;
         end else begin
-            g_s1     <= g;
+            g_s1     <= g_selected;
             vsync_s1 <= vsync_i;
             de_s1    <= de_i;
         end

@@ -48,6 +48,11 @@ import sys
 THR_HIGH = 16   # 强边阈值（mag8 域，等价真实 |Gx|+|Gy| = 128 → ΔY ≥ 43）
 THR_LOW = 8     # 弱边阈值（>= 它的才可能被滞后连接）→ ΔY ≥ 22
 
+# Canny 前置平滑（与 RTL 的 smooth_mode_i / tb 的 +SMOOTH 同值）：
+#   0 = 标准 1:2:1 高斯；1 = (p22 + 高斯 + 1) >> 1；2 = 完全旁路 p22。
+# 由 main() 的 --smooth 设置；其他函数直接读这个全局值。
+SMOOTH = 0
+
 # M2 流水线的固有空间偏移：RTL 输出 (r,c) 上的像素 = 理想参考 (r+DR, c+DC)。
 # 由窗口链推出：pix_window_3x3 的中心偏 (-1,0) → canny 内的高斯窗口再 (-1,0)
 # → 梯度窗口再 (-1,0)；列方向两级的读地址都是预测式（col+1），列对齐。
@@ -80,7 +85,15 @@ def ref_grad(img, W, H):
     dir : 方向扇区，与 RTL 的 S8 同一判据
           0 = 0°（梯度近水平）1 = 90°（近竖直）2 = 45°（Gx、Gy 同号）3 = 135°
     """
-    g = [[gauss_at(img, W, H, r, c) for c in range(W)] for r in range(H)]
+    if SMOOTH == 2:
+        # 旁路：Canny 直接吃中心像素 p22
+        g = [row[:] for row in img]
+    else:
+        g = [[gauss_at(img, W, H, r, c) for c in range(W)] for r in range(H)]
+        if SMOOTH == 1:
+            # 弱平滑：(p22 + 高斯 + 1) >> 1，四舍五入
+            g = [[(img[r][c] + g[r][c] + 1) >> 1 for c in range(W)]
+                 for r in range(H)]
 
     def gp(dr, dc):
         return g[clamp(r + dr, 0, H - 1)][clamp(c + dc, 0, W - 1)]
@@ -385,7 +398,7 @@ def write_hex(path, img, W, H):
 
 
 def run_tb(exe, build, stim, out, W, H):
-    cmd = [exe, "+STIM=%s" % stim, "+OUT=%s" % out]
+    cmd = [exe, "+STIM=%s" % stim, "+OUT=%s" % out, "+SMOOTH=%d" % SMOOTH]
     res = subprocess.run(cmd, cwd=build, capture_output=True, text=True, timeout=600)
     return res.stdout + res.stderr
 
@@ -461,7 +474,12 @@ def main():
     ap.add_argument("names", nargs="*", help="只跑指定图样（默认全跑）")
     ap.add_argument("--W", type=int, default=64)
     ap.add_argument("--H", type=int, default=32)
+    ap.add_argument("--smooth", type=int, choices=(0, 1, 2), default=0,
+                    help="Canny 前置平滑：0 标准高斯 / 1 弱平滑 / 2 旁路")
     args = ap.parse_args()
+
+    global SMOOTH
+    SMOOTH = args.smooth
 
     W, H = args.W, args.H
     build = args.build

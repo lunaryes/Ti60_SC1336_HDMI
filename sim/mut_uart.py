@@ -5,9 +5,11 @@
 tb_uart_cmd 的命令用例都靠 thr_o/view_o/mode_o 这几个寄存器做判据，
 如果哪天接收通路整体失效（比如 rx_valid 不再脉冲），这些寄存器会停在
 复位默认值上 —— 而复位默认值恰好又被第一组用例单独检查过，容易出现
-"看起来测了、其实什么都没测"的假绿。这里用三个必死变异封住这个口子。
+"看起来测了、其实什么都没测"的假绿。这里用多个必死变异封住这个口子
+（当前 9 个：回包字段互换/错值、命令写错通道、'S' 截断与脉冲、接收通路失效等）。
 
-用法（不进 run.sh：要编译三次，约 30 秒，只在改动 uart_cmd.v 或 tb 后手动跑）：
+用法（不进 run.sh：每个变异都要完整编译一次 Verilator 台，合计约 15 分钟；
+只在改动 uart_cmd.v 或 tb_uart_cmd.v 后手动跑）：
     python3 sim/mut_uart.py
 """
 import os
@@ -29,12 +31,33 @@ MUTANTS = [
     ),
     (
         "T 命令写入 +1",
-        [("C_T:     thr_o    <= rx_byte;", "C_T:     thr_o    <= rx_byte + 1'b1;")],
+        [("thr_o       <= rx_byte;", "thr_o       <= rx_byte + 1'b1;")],
         "FAIL",
     ),
     (
         "AWB 增益写进了相反的通道（'A' 命令改到 gain_b_o）",
-        [("C_A:     gain_r_o <= rx_byte;", "C_A:     gain_b_o <= rx_byte;")],
+        [("gain_r_o <= rx_byte;", "gain_b_o <= rx_byte;")],
+        "FAIL",
+    ),
+    (
+        "'S' 写入不再出 valid 脉冲",
+        [("smooth_valid_o <= 1'b1;", "smooth_valid_o <= 1'b0;")],
+        "FAIL",
+    ),
+    (
+        "'S' 参数不再截断到 2",
+        [("smooth_o       <= (rx_byte[1:0] > 2'd2) ? 2'd2\n                                                                     : rx_byte[1:0];",
+          "smooth_o       <= rx_byte[1:0];")],
+        "FAIL",
+    ),
+    (
+        "回包把 smooth 写成固定 0",
+        [("tx_d[5] <= {6'b0, smooth_read_i};", "tx_d[5] <= {6'b0, 2'd0};")],
+        "FAIL",
+    ),
+    (
+        "回包 thr 不再取实际生效值（改用 uart_cmd 自己的寄存器）",
+        [("tx_d[0] <= thr_read_i;", "tx_d[0] <= thr_o;")],
         "FAIL",
     ),
     (

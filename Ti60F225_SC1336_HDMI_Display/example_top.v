@@ -248,8 +248,8 @@ module example_top
 	//	★ 2026-10-16：GPIOL_P_02 / GPIOL_N_02 原分给 lcd_de_o / lcd_pclk_o，但这两个
 	//	  LCD 端口在本设计里从未被驱动（lcd_pclk_o 的端口声明本身就是注释掉的），
 	//	  而显示走 HDMI，所以把这两个脚改分给按键（Ti60_Demo.peri.xml 同步改）。
-	input 		 	key1_i,				//	K1 = CSI = GPIOL_P_02 -> Canny 阈值 +
-	input 		 	key2_i,				//	K2 = CSO = GPIOL_N_02 -> Canny 阈值 -
+	input 		 	key1_i,				//	K1 = CSI = GPIOL_P_02 -> Canny 平滑模式循环
+	input 		 	key2_i,				//	K2 = CSO = GPIOL_N_02 -> Canny 阈值循环（步长 1）
 
 
 	////////////////////////////////////////////////////////////////
@@ -1128,8 +1128,8 @@ assign w_rgb_b = (w_rgb_b_mult >= 16'd16384) ? 8'hFF : w_rgb_b_sc[7:0];
 // Image pipeline : rgb_to_gray -> pix_window_3x3 -> canny_edge -> image_mix
 // 插入点：AWB 之后、FrameBoundCrop 之前（docs/ARCH.md §1），全部在 clk_pixel 单域
 // =========================================================================================================================================
-localparam IMG_MODE_DEF = 2'd3;  // 0=原图 1=边缘图 2=分屏(左原图+右边缘) 3=画中画(暂等同分屏)
-localparam IMG_VIEW_DEF = 2'd0;  // 0=二值边缘图 1=mag8 图 2=四类假彩图 3=Y 图
+localparam IMG_MODE_DEF = 2'd3;  // 0=原图 1=边缘图 2=分屏(左灰度+右边缘) 3=画中画(暂等同分屏)
+localparam IMG_VIEW_DEF = 2'd0;  // 0=二值边缘图 1=mag8 图 2=五状态假彩图 3=Y 图
                                  // （四种视图的口径见 image_pipeline_top 的【view_i】）
 localparam IMG_THR_DEF  = 8'd12; // Canny 强边阈值（内部 mag8 = mag>>3 域，弱边 = 该值/2）
                                  // ★★ 从 40 → 16 → 12：原值 40 实际要求满幅 **42%** 的对比度
@@ -1138,60 +1138,99 @@ localparam IMG_THR_DEF  = 8'd12; // Canny 强边阈值（内部 mag8 = mag>>3 �
                                  //    检出、且没有多余细线），所以复位值落 12。完整的反查标尺见
                                  //    canny_edge.v 头注释。
                                  //    ★ 2026-10-16：这个值现在是**按键控制器的复位值**
-                                 //      （K1 加 / K2 减，步长 4，范围 4..48），上板后不插串口、
-                                 //      不重综合就能改；见下面的 canny_threshold_key_ctrl 例化。
+                                 //      （2026-10-17 起：K2 循环阈值 4..48、步长 1；K1 循环
+                                 //      平滑模式），上板后不插串口、不重综合就能改；
+                                 //      见下面的 canny_threshold_key_ctrl 例化。
                                  //    ★ 若以后把采集端修好（AWB/曝光/换打印纸卡），可以再抬回 16。
-localparam IMG_LAT      = 16;    // = image_pipeline_top 的 LATENCY，两处必须一致
+localparam IMG_LAT      = 19;    // = image_pipeline_top 的 LATENCY，两处必须一致
+                                 //   （2026-10-17 接入 3x3 中值：+1 中值 +2 后级窗口）
 
 wire                                    pipe_vs                    ;
 wire                                    pipe_de                    ;
 wire                   [  23:0]         pipe_rgb                   ;
 wire                   [   7:0]         w_img_thr                  ;
+wire                   [   7:0]         w_uart_thr                 ;   // uart_cmd 'T' 写入值
+wire                                    w_uart_thr_valid           ;   // 同拍单脉冲
 wire                   [   1:0]         r_img_mode                 ;
 wire                   [   1:0]         r_img_view                 ;
+wire                   [   1:0]         r_smooth_mode              ;   // uart_cmd 'S' 寄存器
+wire                                    r_smooth_valid             ;   // 同拍单脉冲
+wire                   [   1:0]         w_smooth_mode              ;   // 实际生效（按键也会改）
+
+//---------------------------------------------------------------------
+// M6 片内灰度直方图（无采集卡时量 Y 分布）
+//   uart_cmd 'H' → hist_req（单拍）→ gray_hist_uart 测完整一帧 →
+//   778 字节回传。两个模块共用 uart_tx_o，所以：
+//     · hist_busy=1 时把 uart_cmd 的 rx_i 拉高，屏蔽新命令；
+//     · hist_tx_busy=1 时把 TX 引脚切给直方图；
+//     · gray_hist_uart 发流前还会等 cmd_tx_busy=0，避免抢在途回包。
+//   详见 src/common/gray_hist_uart.v 头注释。
+//---------------------------------------------------------------------
+wire                                    hist_req                   ;   // uart_cmd 'H' 单拍
+wire                                    cmd_tx_busy                ;   // uart_cmd TX 忙
+wire                                    cmd_tx                     ;   // uart_cmd TX 引脚
+wire                                    hist_busy                  ;   // 直方图测量/回传中
+wire                                    hist_tx_busy               ;   // 直方图正在发流
+wire                                    hist_tx                    ;   // 直方图 TX 引脚
+wire                                    uart_cmd_rx                ;   // 门控后的 RX
+wire                   [   7:0]         hist_y                     ;   // pipeline 的 Y 抽头
+wire                                    hist_de                    ;
+wire                                    hist_vs                    ;
+
+// 直方图忙时 uart_cmd 收到的是"空闲高"，不会再解析任何字节
+assign uart_cmd_rx = hist_busy ? 1'b1 : uart_rx_i;
 
 //---------------------------------------------------------------------
 // 串口命令接口：把 view / mode 从编译期常量变成运行时寄存器，现场调参不用
 // 重新综合。uart_rx_i / uart_tx_o 早已声明并在 Ti60_Demo.peri.xml 里分配了
 // 引脚（GPIOT_N_16 / GPIOT_P_16），此前全工程从未引用。跑在 clk_pixel 域，
 // 与流水线同域，不需要 CDC。
-// 命令格式（2 字节帧：命令 + 参数）：'V'<view> 'M'<mode>，'A'<AWB R 增益>，
-// 'B'<AWB B 增益>，'R' 回读 6 字节 {thr, view, mode, gain_r, gain_b, '\n'}。
-// 详见 src/common/uart_cmd.v。
+// 命令格式（2 字节帧：命令 + 参数）：'T'<thr> 'S'<smooth> 'V'<view> 'M'<mode>，
+// 'A'<AWB R 增益>，'B'<AWB B 增益>，'R' 回读 7 字节
+// {thr, view, mode, gain_r, gain_b, smooth, '\n'}。详见 src/common/uart_cmd.v。
 //
-// ★ 2026-10-16：**阈值不再走串口**。thr_o 从这里断开，改由下面的按键控制器
-//   （canny_threshold_key_ctrl）单独产生，现场调阈值不用插串口。因此：
-//   · 'T'<byte> 仍会写进 uart_cmd 内部那个寄存器（协议不变，但**不再影响画面**）；
-//   · 'R' 回读的第 1 个字节就是那个寄存器，**不等于**当前生效阈值（按键改过就不等了）；
-//   · view / mode / AWB 增益三路不受影响，回读仍然可靠。
-//   要恢复串口调阈值：把 thr_o 接到 canny_threshold_key_ctrl 的 uart_thr_i，再给
-//   uart_thr_valid_i 一个 "'T' 写入" 的单拍脉冲（该模块已带这条通路，串口写优先于按键）。
+// ★ 2026-10-17：**阈值/平滑串口控制**（与按键并存，串口优先）。
+//   thr_o/thr_valid_o、smooth_o/smooth_valid_o 接到下面
+//   canny_threshold_key_ctrl 的对应 uart 输入：
+//   · 'T'<byte> 写入即生效，量程 0..255；K2 循环阈值，步长 1、范围 4..48；
+//   · 'S'<byte> 写平滑模式 0/1/2（>2 截断）；K1 循环 0→1→2→0；
+//   · 'R' 回读的第 1/6 字节分别是实际生效阈值/平滑模式（含按键修改）。
 //---------------------------------------------------------------------
 uart_cmd #(
     .CLK_FREQ (74250000),        // clk_pixel
     .BAUD     (460800),
-    .THR_DEF  (IMG_THR_DEF),     // 现在只影响 'R' 回读的第 1 个字节（见上）
+    .THR_DEF  (IMG_THR_DEF),     // 'T' 写入前的回读值；与按键控制器默认值相同
     .VIEW_DEF (IMG_VIEW_DEF),
     .MODE_DEF (IMG_MODE_DEF)
 ) u_uart_cmd (
     .clk    (clk_pixel                 ),
     .rst_n  (rstn_pixel                ),
-    .rx_i   (uart_rx_i                 ),
-    .tx_o   (uart_tx_o                 ),
+    .rx_i   (uart_cmd_rx               ),   // 直方图忙时被拉高（见上）
+    .tx_o   (cmd_tx                    ),   // 与 hist_tx 二选一后送 uart_tx_o
 
-    .thr_o  (                          ),   // ★ 不再接流水线：阈值 = 按键（见下）
+    .thr_read_i   (w_img_thr            ),   // 'R' 回读实际生效阈值（含按键）
+    .smooth_read_i(w_smooth_mode        ),   // 'R' 回读实际生效平滑模式
+    .thr_o       (w_uart_thr           ),   // 'T' 写入 → 按键控制器（串口优先）
+    .thr_valid_o (w_uart_thr_valid     ),   // 同拍单脉冲
     .view_o (r_img_view                ),
     .mode_o (r_img_mode                ),
+    .smooth_o (r_smooth_mode           ),   // 'S' 写入 → 按键控制器
+    .smooth_valid_o (r_smooth_valid    ),   // 同拍单脉冲
 
-    .gain_r_o (r_awb_gain              ),   // AWB R 增益（1/64 定点，复位 102 ≈ ×1.59）
-    .gain_b_o (b_awb_gain              )    // AWB B 增益（复位 96 = ×1.50）
+    .gain_r_o (r_awb_gain              ),   // AWB R 增益（1/64 定点，复位 112 = ×1.75）
+    .gain_b_o (b_awb_gain              ),   // AWB B 增益（复位 96 = ×1.50）
+
+    .hist_req_o (hist_req              ),   // 'H' → 直方图模块
+    .tx_busy_o  (cmd_tx_busy           )    // 直方图发流前避让在途回包
 );
 
 //---------------------------------------------------------------------
-// Canny 阈值按键控制（K1 / K2）—— 阈值的**唯一来源**
-//   模块自带 2FF 同步 + 20 ms 消抖 + 按下沿事件 + 步进/饱和，全在 clk_pixel 域，
-//   与流水线同域。K1 加、K2 减，步长 4，范围 4..48（IMG_THR_DEF 是复位值）。
-//   按住不放不会连续步进；不按则阈值保持不变，所以静态画面与改动前一致。
+// Canny 阈值/平滑控制（K1 / K2 + 串口 'T'/'S'）—— 两个参数的唯一来源
+//   模块自带 2FF 同步 + 20 ms 消抖 + 按下沿事件，全在 clk_pixel 域，与流水线同域。
+//   K2 循环阈值：4,5,...,48,4,...（步长 1，IMG_THR_DEF 是复位值）；
+//   K1 循环平滑模式：0 标准高斯 -> 1 弱平滑 -> 2 旁路 -> 0（复位值 1）。
+//   串口 'T'/'S' 通过 uart_*_valid_i 直接写入，优先于按键；'T' 量程 0..255。
+//   按住不放不会连续步进；不按则参数保持不变。
 //---------------------------------------------------------------------
 canny_threshold_key_ctrl #(
     .CLK_FREQ_HZ (74250000),     // clk_pixel
@@ -1199,17 +1238,20 @@ canny_threshold_key_ctrl #(
     .THR_DEFAULT (IMG_THR_DEF),
     .THR_MIN     (8'd4),
     .THR_MAX     (8'd48),
-    .THR_STEP    (8'd4)
+    .THR_STEP    (8'd1)
 ) u_canny_thr_key (
     .clk   (clk_pixel                  ),
     .rst_n (rstn_pixel                 ),
 
-    .key_data          ({key2_i, key1_i}),   // [0] = K1 加 / [1] = K2 减
-    .uart_thr_valid_i  (1'b0           ),    // 保留端口，不接串口（见上）
-    .uart_thr_i        (8'd0           ),
+    .key_data          ({key2_i, key1_i}),   // [0] = K1 平滑 / [1] = K2 阈值
+    .uart_thr_valid_i  (w_uart_thr_valid),   // 'T' 单拍脉冲（串口优先）
+    .uart_thr_i        (w_uart_thr     ),    // 'T' 写入值，量程 0..255
+    .uart_smooth_valid_i (r_smooth_valid),   // 'S' 单拍脉冲（串口优先）
+    .uart_smooth_i     (r_smooth_mode  ),    // 'S' 写入值，0..2
 
     .threshold_o       (w_img_thr      ),    // -> image_pipeline_top.thr_i
     .threshold_low_o   (               ),    // 流水线内部自己算 thr_low = thr_i >> 1
+    .smooth_mode_o     (w_smooth_mode  ),    // -> image_pipeline_top.smooth_mode_i
     .key_press_o       (               )     // 单拍按下脉冲：只在板上用 ILA 才看得到
 );
 
@@ -1223,11 +1265,45 @@ image_pipeline_top #(.IMG_W(1280),.IMG_H(720),.LATENCY(IMG_LAT)) u_image_pipelin
     .thr_i                             (w_img_thr                 ),
     .mode_i                            (r_img_mode                ),
     .view_i                            (r_img_view                ),
+    .smooth_mode_i                     (w_smooth_mode             ),
 
     .vsync_o                           (pipe_vs                   ),
     .de_o                              (pipe_de                   ),
-    .rgb_o                             (pipe_rgb                  )
+    .rgb_o                             (pipe_rgb                  ),
+
+    // M6 调试抽头：中值后、Canny 实际看到的 Y/de/vs（不增加逻辑）
+    .dbg_y_o                           (hist_y                    ),
+    .dbg_de_o                          (hist_de                   ),
+    .dbg_vs_o                          (hist_vs                   )
 );
+
+//---------------------------------------------------------------------
+// 片内灰度直方图：测一帧 Y 分布，778 字节从 UART 回传（'H' 触发）
+//   跑在 clk_pixel，与流水线同域；实测 1 块 EFX_RAM10、225 FF、0 DSP。
+//   不插串口 / 不发 'H' 时它只是空闲，不影响画面和原有命令。
+//---------------------------------------------------------------------
+gray_hist_uart #(
+    .CLK_FREQ (74250000),
+    .BAUD     (460800)
+) u_gray_hist (
+    .clk           (clk_pixel                  ),
+    .rst_n         (rstn_pixel                 ),
+
+    .y_i           (hist_y                     ),
+    .de_i          (hist_de                    ),
+    .vsync_i       (hist_vs                    ),
+
+    .hist_req_i    (hist_req                   ),
+    .cmd_tx_busy_i (cmd_tx_busy                ),
+
+    .busy_o        (hist_busy                  ),
+    .tx_busy_o     (hist_tx_busy               ),
+    .tx_o          (hist_tx                    )
+);
+
+// UART TX 引脚二选一。两边空闲电平都是高，切换只发生在 uart_cmd 空闲之后
+// （gray_hist_uart 在 H_DUMP_INIT 等 cmd_tx_busy=0），不会截断在途字节。
+assign uart_tx_o = hist_tx_busy ? hist_tx : cmd_tx;
 
 // hsync 要比 de 早 IMG_LAT 个像素才与流水线后的数据同拍（= image_pipeline_top 的
 // LATENCY），否则 rgb2dvi 送出的 HS 与 DE 错位，HDMI 画面横移。

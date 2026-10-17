@@ -6,21 +6,26 @@
 //       正好原值还原，所以边缘图可以和 tb_canny_edge 用同一套 .hex 图样。
 // 结构：同一个输入同时喂
 //         · u_dut —— image_pipeline_top（真实工程配置）
-//         · 旁路参考链 pix_window_3x3 + canny_edge（阈值 16/8，与顶层
-//           thr_i = 16 → 16/8 的映射一致，映射写错这里就会报）
+//         · 旁路参考链 pix_window_3x3 + median_filter_3x3 + pix_window_3x3 +
+//           canny_edge（阈值 16/8，与顶层 thr_i = 16 → 16/8 的映射一致，
+//           映射写错这里就会报）
 // 自检项（全在 Verilog 里，不依赖 Python；算法本身的精度归 tb_canny_edge.v）：
 //   1) 延迟：src_de 上升沿 → bin_de 上升沿 = IMG_LAT；vsync 同理且**高电平宽度
 //      不变**（送到 rgb2dvi 的 VS 不能被压窄，否则显示器锁不住帧）
 //   2) mode 0 旁路：bin_rgb 与 rgb_i 延迟 IMG_LAT 逐像素一致，**每个时钟沿都比**
 //      （含消隐期：原图路径是纯寄存器延迟，image_mix 又不在 de=0 时清零）
 //   3) mode 1 的四种 view 各对一遍参考链：
-//        view 0 二值边缘图 / 1 mag8 图（min(mag8<<1,255)）/ 2 四类假彩图 / 3 Y 图
-//   4) mode 2/3：第 < IMG_W/2 列 = 原图、其余 = 边缘图，逐行逐点查
+//        view 0 二值边缘图 / 1 mag8 图（min(mag8<<1,255)）/ 2 五状态假彩图 / 3 Y 图
+//        view 2 的五色：白 = 强边，蓝 = 弱边且滞回连通，黄 = 弱边但未连通，
+//        暗红 = NMS 抑制，黑 = 无响应
+//   4) mode 2/3：第 < IMG_W/2 列 = 中值后灰度图、其余 = 边缘图，逐行逐点查
+//      （2026-10-17 起左半从原图改为灰度图，黄金值用 ref_y_rgb）
 //   5) 帧间靠 mode/view 只在帧首切换，输出与输入逐拍对齐（不做帧号对齐）
 //
-//   注：view 3（Y 图）在这个台子里和原图黄金值恰好相等 —— 激励是 {g,g,g}，
-//       rgb_to_gray 恒等。它验证的是 y_dly 的延迟深度对不对（差一拍就整帧错），
-//       不是灰度公式；灰度公式由 tb_rgb_to_gray.v 单独验。
+//   注：view 3（Y 图）的黄金值取自参考链的中值输出（不是原图）—— 激励是
+//       {g,g,g}，但 IMPULSE_ONLY 中值仍可能改掉孤立极值点。它验证的是 y_dly
+//       相对中值输出的延迟深度对不对（差一拍就整帧错），不是灰度公式；灰度
+//       公式由 tb_rgb_to_gray.v 单独验。
 //
 // 运行： ./obj_dir/Vtb_pipeline_top +STIM=xxx.hex     （见 sim/run.sh）
 //=====================================================================
@@ -30,8 +35,10 @@ module tb_pipeline_top;
     parameter IMG_H = 32;
 
     // 改 RTL 延迟时这里要跟着改（有意写死，避免"改了 RTL 测试台自动跟随"）
-    localparam IMG_LAT  = 16;                  // image_pipeline_top.LATENCY
-                                               // （内部 = 原图 15 拍 + image_mix 1 拍）
+    localparam IMG_LAT  = 19;                  // image_pipeline_top.LATENCY
+                                               // （内部 = 原图 18 拍 + image_mix 1 拍）
+    localparam Y_DLY    = 14;                  // 中值输出到 can_de 的对齐拍数
+                                               // （= ORIG_LAT - 1 - 灰度1 - 窗A2 - 中值1）
     localparam THR_HIGH = 8'd16;               // = 顶层 thr_i（M5：由 40 改为 16）
     localparam THR_LOW  = 8'd8;                // = 顶层内部 thr_i >> 1
 
@@ -121,7 +128,7 @@ module tb_pipeline_top;
                 3:       begin mode <= 2'd2; view <= 2'd0; end   // 分屏
                 4:       begin mode <= 2'd3; view <= 2'd0; end   // 画中画（同分屏）
                 5:       begin mode <= 2'd1; view <= 2'd1; end   // mag8 图
-                6:       begin mode <= 2'd1; view <= 2'd2; end   // 四类假彩图
+                6:       begin mode <= 2'd1; view <= 2'd2; end   // 五状态假彩图
                 7:       begin mode <= 2'd1; view <= 2'd3; end   // Y 图
                 default: begin mode <= 2'd0; view <= 2'd0; end   // 旁路
             endcase
@@ -141,6 +148,7 @@ module tb_pipeline_top;
         .clk_i (clk), .rst_ni (rst_n),
         .vsync_i (src_vs), .de_i (src_de), .rgb_i (src_rgb),
         .thr_i (THR_HIGH), .mode_i (mode), .view_i (view),
+        .smooth_mode_i (2'd0),                  // 0 = 标准高斯，参考链同值
         .vsync_o (bin_vs), .de_o (bin_de), .rgb_o (bin_rgb)
     );
 
@@ -172,17 +180,45 @@ module tb_pipeline_top;
         .p31 (rp31), .p32 (rp32), .p33 (rp33)
     );
 
+    // 中值级：参数必须与 u_dut 的默认值一致（IMPULSE_ONLY=1 / DELTA=24）
+    wire        rmed_vs, rmed_de;
+    wire [7:0]  rmed_y;
+
+    median_filter_3x3 u_ref_median (
+        .clk (clk), .rst_n (rst_n),
+        .vsync_i (rwin_vs), .de_i (rwin_de),
+        .p11 (rp11), .p12 (rp12), .p13 (rp13),
+        .p21 (rp21), .p22 (rp22), .p23 (rp23),
+        .p31 (rp31), .p32 (rp32), .p33 (rp33),
+        .vsync_o (rmed_vs), .de_o (rmed_de),
+        .gray_o (rmed_y)
+    );
+
+    // 中值输出的是单像素流，Canny 需要再构一级 3x3 窗口
+    wire        rwin2_vs, rwin2_de;
+    wire [7:0]  rq11, rq12, rq13, rq21, rq22, rq23, rq31, rq32, rq33;
+
+    pix_window_3x3 #(.IMG_W (IMG_W)) u_ref_win2 (
+        .clk (clk), .rst_n (rst_n),
+        .vsync_i (rmed_vs), .de_i (rmed_de), .gray_i (rmed_y),
+        .vsync_o (rwin2_vs), .de_o (rwin2_de),
+        .p11 (rq11), .p12 (rq12), .p13 (rq13),
+        .p21 (rq21), .p22 (rq22), .p23 (rq23),
+        .p31 (rq31), .p32 (rq32), .p33 (rq33)
+    );
+
     wire        ref_vs, ref_de, ref_edge;
     wire [7:0]  ref_mag, ref_mag8;
     wire [1:0]  ref_cls;
 
     canny_edge #(.IMG_W (IMG_W), .LATENCY (12)) u_ref_canny (
         .clk (clk), .rst_n (rst_n),
-        .vsync_i (rwin_vs), .de_i (rwin_de),
-        .p11 (rp11), .p12 (rp12), .p13 (rp13),
-        .p21 (rp21), .p22 (rp22), .p23 (rp23),
-        .p31 (rp31), .p32 (rp32), .p33 (rp33),
+        .vsync_i (rwin2_vs), .de_i (rwin2_de),
+        .p11 (rq11), .p12 (rq12), .p13 (rq13),
+        .p21 (rq21), .p22 (rq22), .p23 (rq23),
+        .p31 (rq31), .p32 (rq32), .p33 (rq33),
         .thr_high_i (THR_HIGH), .thr_low_i (THR_LOW),
+        .smooth_mode_i (2'd0),                  // 与 u_dut 同值
         .vsync_o (ref_vs), .de_o (ref_de),
         .mag_o (ref_mag), .edge_o (ref_edge),
         .mag8_o (ref_mag8), .cls_o (ref_cls)
@@ -193,8 +229,10 @@ module tb_pipeline_top;
     // 四种 view 的黄金值（组合值与顶层同名逻辑一一对应，改一处必须改两处）
     wire [8:0]  ref_mag8x2  = {1'b0, ref_mag8} << 1;
     wire [7:0]  ref_mag8v   = ref_mag8x2[8] ? 8'hFF : ref_mag8x2[7:0];
+    // 五状态：强边白 / 弱边分为"滞回连通"蓝与"未连通"黄 / NMS 抑制暗红 / 无响应黑
     wire [23:0] ref_cls_rgb = (ref_cls == 2'b11) ? 24'hFFFFFF :
-                              (ref_cls == 2'b10) ? 24'h0000FF :
+                              (ref_cls == 2'b10) ? (ref_edge ? 24'h0000FF
+                                                             : 24'hFFFF00) :
                               (ref_cls == 2'b01) ? 24'h800000 : 24'h000000;
 
     reg [23:0] ref_edge_rgb = 24'h000000;
@@ -231,13 +269,26 @@ module tb_pipeline_top;
 
     wire [23:0] ref_orig_rgb = src_dly[IMG_LAT-1];
 
-    // view 3 的黄金值：顶层进 image_mix 的是 y_dly[ORIG_LAT-2]，即"rgb_i 延迟
-    // ORIG_LAT-1 = 15 拍"的灰度值 = src_dly[IMG_LAT-2]；再经 image_mix 那 1 拍
-    // 寄存器才是顶层出口，所以这里寄一次得到 IMG_LAT = 16 拍。
-    // 激励是 {g,g,g}，rgb_to_gray 恒等，所以黄金额度就是原图本身。
+    // view 3 的黄金值：顶层进 image_mix 的是 y_dly[Y_DLY-1]，即中值输出再延
+    // Y_DLY = 14 拍（中值在第 4 拍，+14 = ORIG_LAT = 18 拍）；再经 image_mix
+    // 那 1 拍寄存器才是顶层出口，所以这里同样延 14 拍后再寄一次 = IMG_LAT。
+    reg [7:0] rmed_dly [0:Y_DLY-1];
+
+    integer m;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n)
+            for (m = 0; m < Y_DLY; m = m + 1) rmed_dly[m] <= 8'd0;
+        else begin
+            rmed_dly[0] <= rmed_y;
+            for (m = 1; m < Y_DLY; m = m + 1)
+                rmed_dly[m] <= rmed_dly[m-1];
+        end
+    end
+
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) ref_y_rgb <= 24'h000000;
-        else        ref_y_rgb <= src_dly[IMG_LAT-2];
+        else        ref_y_rgb <= {rmed_dly[Y_DLY-1], rmed_dly[Y_DLY-1],
+                                  rmed_dly[Y_DLY-1]};
     end
 
     //------------------------------------------------------------------
@@ -330,7 +381,8 @@ module tb_pipeline_top;
                 2'd2, 2'd3: begin
                     if (bin_de) begin
                         if (out_col < HALF_W) begin
-                            if (bin_rgb !== ref_orig_rgb) err_split = err_split + 1;
+                            // 左半 = 中值后的灰度图（{Y,Y,Y}），不是原图
+                            if (bin_rgb !== ref_y_rgb) err_split = err_split + 1;
                         end else begin
                             if (bin_rgb !== ref_edge_rgb) err_split = err_split + 1;
                         end
@@ -359,7 +411,7 @@ module tb_pipeline_top;
         $display("MODE0    旁路逐像素失配 %0d 点", err_bypass);
         $display("VIEW0    二值边缘图失配 %0d 点", err_edge);
         $display("VIEW1    mag8 图失配 %0d 点", err_mag8);
-        $display("VIEW2    四类假彩图失配 %0d 点", err_cls);
+        $display("VIEW2    五状态假彩图失配 %0d 点", err_cls);
         $display("VIEW3    Y 图失配 %0d 点", err_y);
         $display("MODE2/3  分屏失配 %0d 点", err_split);
 
@@ -370,7 +422,7 @@ module tb_pipeline_top;
         if (err_bypass != 0)                       begin fails=fails+1; $display("FAIL: mode 0 旁路不逐像素一致"); end
         if (err_edge != 0)                         begin fails=fails+1; $display("FAIL: view 0 二值边缘图不符"); end
         if (err_mag8 != 0)                         begin fails=fails+1; $display("FAIL: view 1 mag8 图不符"); end
-        if (err_cls  != 0)                         begin fails=fails+1; $display("FAIL: view 2 假彩图不符"); end
+        if (err_cls  != 0)                         begin fails=fails+1; $display("FAIL: view 2 五状态假彩图不符"); end
         if (err_y    != 0)                         begin fails=fails+1; $display("FAIL: view 3 Y 图不符"); end
         if (err_split != 0)                        begin fails=fails+1; $display("FAIL: mode 2/3 分屏不符"); end
 

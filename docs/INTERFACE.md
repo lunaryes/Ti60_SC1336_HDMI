@@ -12,7 +12,7 @@
 | `canny_edge` | `src/image/canny_edge.v` | 硬件近似 Canny：高斯 → Sobel → 方向量化 → NMS → 双阈值滞后，见 §4.5 | I-B |
 | `image_mix` | `src/display/image_mix.v` | 原图与边缘图的分屏 / 画中画 / 叠加合成 | I-C |
 | `image_pipeline_top` | `src/image/image_pipeline_top.v` | 流水线顶层，串联上述模块并做旁路 | I-A |
-| `uart_cmd` | `src/common/uart_cmd.v` | 串口命令口（调试）：运行时改 `thr / view / mode`，见 §7 | — |
+| `uart_cmd` | `src/common/uart_cmd.v` | 串口命令口（调试）：运行时改 `thr / view / mode / smooth`，见 §7 | — |
 
 ## 2. 全局约定
 
@@ -64,7 +64,9 @@ module pix_window_3x3 #(
 - 空间对齐：输出窗口中心 = 与输出同拍进入的那一像素的**上一行、左一列**；实测（2026-10-13，`sim/canny_ref.py` 逐点比对）偏移是**下移 1 行、0 列**——窗口的"左一列"与流水线自身的滞后恰好抵消，列方向不偏移。原文写的"右下偏移 1 行 1 列"里行数对、列数不对，已按实测订正。（边缘图相对原图的行偏移还要算上 `canny_edge` 内部两级窗口，见 §4.5。）
 - 存储：3 个 `IMG_W × 8 bit` bank 按行轮转（1 写 2 读，标准 SDP 写法，推断为 BRAM），实测 128 FF + 149 LUT + 6 个 EFX_RAM10。不用 `src/isp/Line_Shift_RAM_8Bit.v`：它是"延迟 1 行 + 1 像素"（相邻两行固定错 1 列，要 `pixel_cnt` 特判去补），且深度按 2 的幂开、1280 点要占 2048 深，浪费约 40%；`src/isp/` 下原件一行未改。
 - 边界（冻结）：**行首整窗复制最近的有效列**，不补零。行方向前两行与行尾末列不做特判——它们落在 `FrameBoundCrop` 的黑边内，同样不可见。
-- 只例化一次；边缘检测（原 Sobel → 现 `canny_edge`）与后续中值并行消费同一组 `p11..p33`。
+- 2026-10-17 起在流水线里**例化两次**：第一级给 `median_filter_3x3` 提供
+  `p11..p33`，中值输出单像素流后再构第二级窗口给 `canny_edge`。中值不再与
+  边缘检测并行消费同一组像素——"并行"只能让中值作用于显示，救不了 Canny 的噪声。
 
 ## 4. I-B `sobel_edge`
 
@@ -112,6 +114,7 @@ module canny_edge #(
     input  wire [7:0]  p31, p32, p33,
     input  wire [7:0]  thr_high_i,   // 强边阈值，mag8 = mag>>3 域（**可用量程只有 0..96**）
     input  wire [7:0]  thr_low_i,    // 弱边阈值，同一域
+    input  wire [1:0]  smooth_mode_i,// 0 标准高斯 / 1 弱平滑 / 2 旁路（vsync 上升沿锁存）
     output reg         vsync_o,
     output reg         de_o,
     output reg  [7:0]  mag_o,
@@ -123,6 +126,9 @@ module canny_edge #(
 
 - 算法（冻结）：`g` = 3×3 高斯 `[1 2 1; 2 4 2; 1 2 1]/16`（移位加法，`>>4` 精确）→ 在高斯场上做 Sobel →
   `mag = |Gx| + |Gy|` → 方向量化（只用一个常数 106/256 ≈ tan 22.5°）→ NMS（平局保留）→ 双阈值 + 滞后。
+- `smooth_mode_i`（2026-10-17 增量）：`0` 标准高斯 `gsum>>4`；`1` 弱平滑
+  `(p22 + gaussian + 1)>>1`；`2` 完全旁路 `p22`。在 `vsync_i` 上升沿锁存，
+  帧内切换无接缝；三档延迟同为 12 拍。默认值由按键控制器给 `1`。
 - `mag_o` = 未做 NMS、未过阈值的饱和幅值 `min(mag, 255)`；`edge_o` = `strong || (weak && 8 邻域内有 strong)`，
   其中 `strong = NMS 过 && mag8 >= thr_high_i`、`weak = NMS 过 && mag8 >= thr_low_i`。
 - **阈值域（冻结，重要；2026-10-15 重标定）**：判据在内部 `mag8 = mag >> 3`（不饱和）上，**与 `sobel_edge` 的
@@ -145,7 +151,7 @@ module canny_edge #(
 
 ## 5. I-C `image_mix`
 
-把原图与边缘图合成为一路 RGB888。
+把原图、灰度图与边缘图合成为一路 RGB888。
 
 ```verilog
 module image_mix #(
@@ -157,6 +163,7 @@ module image_mix #(
     input  wire        vsync_i,
     input  wire        de_i,
     input  wire [23:0] orig_rgb_i,   // 原图，与边缘图同拍
+    input  wire [23:0] gray_rgb_i,   // 中值后灰度图 {Y,Y,Y}，与边缘图同拍
     input  wire [23:0] edge_rgb_i,   // 边缘图
     input  wire [1:0]  mode_i,
     output reg         vsync_o,
@@ -169,11 +176,11 @@ module image_mix #(
 | --- | --- |
 | 0 | 原图 |
 | 1 | 边缘图 |
-| 2 | 左半原图 + 右半边缘图（分界列 `IMG_W/2`） |
+| 2 | 左半**灰度图** + 右半边缘图（分界列 `IMG_W/2`） |
 | 3 | 画中画：边缘图缩放至右下角 1/4 —— **暂未实现，当前等同 mode 2** |
 
-- 输出寄存 1 拍，延迟固定为 1。
-- `IMG_W` / `IMG_H` 必须参数化；当前实现只用列计数器 `col_cnt`（`col_cnt < IMG_W/2` 取原图，否则取边缘图）。
+- 输出寄存 1 拍，延迟固定为 1；三路输入必须逐像素同拍。
+- `IMG_W` / `IMG_H` 必须参数化；当前实现只用列计数器 `col_cnt`（`col_cnt < IMG_W/2` 取 `gray_rgb_i`，否则取边缘图）。
 - 顶层建议默认 `mode = 2'd3`；在 mode 3 实现前，上电画面是分屏。
 
 **mode 3 暂未实现的原因**：流式流水线在输出第 y 行时输入只有第 y 行，而右下角要显示整幅边缘图的 1/4 缩放需要回看约 `IMG_H/2` = 360 行，即 640×360×24 ≈ 5.5 Mbit 的帧缓存；Ti60F225 全部 EBR 只有约 2.56 Mbit，放不下（`docs/ARCH.md` §4 的行缓存预算只有约 30 kbit）。后续可选做法：右下象限 1:1 直通边缘图（零缓存），或加一块 1024×24 行缓存做水平 2:1 抽取。两种都只改 `image_mix` 的 case 分支，端口与顶层接线不动。
@@ -181,13 +188,18 @@ module image_mix #(
 ## 6. I-A `image_pipeline_top`
 
 顶层流水线，插在 AWB 之后、`FrameBoundCrop` 之前。内部串联
-`rgb_to_gray(1 拍) → pix_window_3x3(2 拍) → canny_edge(12 拍) → image_mix(1 拍)`。
+`rgb_to_gray(1 拍) → pix_window_3x3(2 拍) → median_filter_3x3(1 拍) →
+pix_window_3x3(2 拍) → canny_edge(12 拍) → image_mix(1 拍)`。
+中值输出是单像素流，Canny 需要 3×3 邻域，所以中值后还要再构一级窗口
+（2026-10-17 接入，用于压掉 thr 调低后的孤立噪点）。
 
 ```verilog
 module image_pipeline_top #(
     parameter IMG_W       = 1280,
     parameter IMG_H       = 720,
-    parameter LATENCY     = 16       // 对外延迟（拍）
+    parameter LATENCY     = 19,      // 对外延迟（拍）
+    parameter integer MEDIAN_IMPULSE_ONLY  = 1,      // 1 = 只替换孤立脉冲
+    parameter [7:0]   MEDIAN_IMPULSE_DELTA = 8'd24   // 替换阈值（灰度差）
 )(
     input  wire        clk_i,        // clk_pixel
     input  wire        rst_ni,
@@ -197,16 +209,20 @@ module image_pipeline_top #(
     input  wire [7:0]  thr_i,        // 复位默认 12 → 内部 thr_high/thr_low = 12/6（见 §4.5）
     input  wire [1:0]  mode_i,       // 含义见 §5
     input  wire [1:0]  view_i,       // 边缘支路显示什么，见下面【view_i】
+    input  wire [1:0]  smooth_mode_i,// Canny 前置平滑：0 标准高斯 / 1 弱平滑 / 2 旁路
     output wire        vsync_o,
     output wire        de_o,
-    output wire [23:0] rgb_o
+    output wire [23:0] rgb_o,
+    output wire [7:0]  dbg_y_o,      // M6 增量：中值后的 Y（Canny 实际输入）
+    output wire        dbg_de_o,     // M6 增量：与 dbg_y_o 同拍
+    output wire        dbg_vs_o      // M6 增量：与 dbg_y_o 同拍
 );
 ```
 
-- 对外延迟（冻结，2026-10-13 由 M4 更新）：**LATENCY = 16 拍** = 1 + 2 + 12 + 1；`rgb_o` 与
+- 对外延迟（2026-10-17 由中值接入更新）：**LATENCY = 19 拍** = 1 + 2 + 1 + 2 + 12 + 1；`rgb_o` 与
   `vsync_o/de_o` 严格同拍，`vsync_o` 宽度与输入相同（送到 `rgb2dvi` 的 VS 必须是完整帧同步电平，压成单拍显示器锁不住帧）。
-  （接 Canny 之前是 8 拍 = 1 + 2 + 4 + 1，`ORIG_LAT` 7 → 15。）
-- 原图走一条 15 拍纯寄存器延迟（不含行缓存），所以 `mode_i = 0` 时输出与输入**逐像素一致**（只差固定 16 拍），用于回归对比。
+  （接 Canny 之前是 8 拍 = 1 + 2 + 4 + 1；接 Canny 后 16 拍；加中值后 19 拍。）
+- 原图走一条 18 拍纯寄存器延迟（不含行缓存），所以 `mode_i = 0` 时输出与输入**逐像素一致**（只差固定 19 拍），用于回归对比。
 - 阈值口只保留一个 8 bit（接口 I-A 不变）：`thr_high = thr_i`、`thr_low = thr_i >> 1`（2:1），见 §4.5 的阈值域说明。
   **默认 12**（40 → 16 → 12：40 是标定错，16 是量纲改对，12 是 2026-10-15 上板扫出来的工作点）；
   复位值写在 `example_top.v` 的 `IMG_THR_DEF`，可在板上用串口改（§7）。
@@ -216,18 +232,29 @@ module image_pipeline_top #(
   | --- | --- | --- |
   | 0 | 二值边缘图（白线黑底） | 默认，出图用 |
   | 1 | `mag8` 灰度图 = `min(mag8<<1, 255)` | **量阈值余量**：thr=16 落在灰度 32，满对比度黑边（mag8=96）落在 192 |
-  | 2 | 四类假彩图：黑=无响应／深红=被 NMS 抑制／蓝=弱边／白=强边 | **判死器**，一眼分清"阈值问题"还是"逻辑问题" |
-  | 3 | Y 灰度图（算法眼里的世界） | **量 ΔY**：屏幕两侧灰度差查 §4.5 的标尺表就知道该不该出边（此视图不做空间对齐，比边缘图高 3 行） |
+  | 2 | 五状态假彩图：黑=无响应／深红=被 NMS 抑制／黄=弱边未连通／蓝=弱边且滞回连通／白=强边 | **判死器**，一眼分清"阈值问题""NMS 问题"还是"滞后连接问题" |
+  | 3 | Y 灰度图（算法眼里的世界，中值后） | **量 ΔY**：屏幕两侧灰度差查 §4.5 的标尺表就知道该不该出边（此视图不做空间对齐，比边缘图高 3 行） |
 
+- `smooth_mode_i`：Canny 前置平滑选择，`0` 标准 1:2:1 高斯、`1` 弱平滑 `(p22+高斯)/2`、`2` 完全旁路。
+  `canny_edge` 在 `vsync_i` 上升沿锁存该值，**帧内切换不会出现半帧接缝**；三种模式延迟相同（12 拍），
+  所以 `LATENCY` 不随平滑模式变化。默认由按键控制器给 `1`。
+
+- `dbg_y_o / dbg_de_o / dbg_vs_o`（M6 增量端口，只增不改）：直接引出
+  **中值滤波之后**、Canny 支路实际看到的 `Y/de/vs`，用来接片内 256 bin 直方图
+  （`gray_hist_uart`，§7）。纯组合直连已有寄存器输出，**不增加延迟、不增资源**；
+  之所以不从 `example_top` 里再例化一份 `rgb_to_gray`，是为了保证统计口径与
+  Canny 完全一致，也避免多 3 个 DSP。`dbg_vs_o` 是 Y 支路的帧同步电平（高有效），
+  直方图模块用它的上升沿切帧。要量原始 `rgb_to_gray` 输出，改接 `gray_y/gray_de/gray_vs`。
 - 集成约束（`example_top`）：`hsync` 必须按**同一 LATENCY** 延迟后再送 `FrameBoundCrop`
-  （当前 16 拍，用 `IMG_LAT` 与顶层 `LATENCY` 共用一个 localparam），否则 `rgb2dvi` 的 HS 与 DE 错位、HDMI 画面横移。
+  （当前 19 拍，用 `IMG_LAT` 与顶层 `LATENCY` 共用一个 localparam），否则 `rgb2dvi` 的 HS 与 DE 错位、HDMI 画面横移。
   `FrameBoundCrop → rgb2dvi` 及其下游一切不动。
-- 已知可见性问题（待 M5 上板定）：边缘图比原图下移 3 行（§4.5），超出 `FrameBoundCrop` 的 `SKIP_ROWS = 2`，
-  帧首还有 3 行暂态落在可见区。两种处理：把 `SKIP_ROWS` 加到 6（整幅黑边变厚 6 行），或接受这几行。
+- 已知可见性问题（待上板定）：边缘图比原图下移 4 行（两级外部窗口 + Canny 内部两级窗口），
+  超出 `FrameBoundCrop` 的 `SKIP_ROWS = 2`，帧首还有 4 行暂态落在可见区（比加中值前多 1 行）。
+  两种处理：把 `SKIP_ROWS` 加到 6（整幅黑边变厚 6 行），或接受这几行。
 
 ## 7. 串口命令口 `uart_cmd`（调试用，非流水线接口）
 
-把 `thr / view / mode` 从"编译期 localparam"变成"运行时可调"，现场调参不用重新综合
+把 `thr / view / mode / smooth` 从"编译期 localparam"变成"运行时可调"，现场调参不用重新综合
 （一次综合约 10 分钟）。**不接入流水线数据通路**，所以不属于 I-A/I-B/I-C 任何一条接口。
 
 ```verilog
@@ -236,37 +263,63 @@ module uart_cmd #(
     parameter integer BAUD     = 460800,     // 分频 161，误差 -0.08%
     parameter [7:0]   THR_DEF  = 8'd12,      // = example_top 的 IMG_THR_DEF
     parameter [1:0]   VIEW_DEF = 2'd0,
-    parameter [1:0]   MODE_DEF = 2'd3
+    parameter [1:0]   MODE_DEF = 2'd3,
+    parameter [1:0]   SMOOTH_DEF = 2'd1
 )(
     input  wire       clk, rst_n, rx_i,      // rx_i 空闲为高
     output wire       tx_o,
+    input  wire [7:0] thr_read_i,    // 实际生效阈值（来自按键控制器），'R' 回读用
+    input  wire [1:0] smooth_read_i, // 实际生效平滑模式
     output reg  [7:0] thr_o,
+    output reg        thr_valid_o,   // 'T' 写入单拍脉冲，与 thr_o 同拍有效
     output reg  [1:0] view_o,
-    output reg  [1:0] mode_o
+    output reg  [1:0] mode_o,
+    output reg  [1:0] smooth_o,
+    output reg        smooth_valid_o,// 'S' 写入单拍脉冲，与 smooth_o 同拍有效
+    output reg  [7:0] gain_r_o,
+    output reg  [7:0] gain_b_o,
+    output reg        hist_req_o,    // 'H'：单拍脉冲，请求一次直方图（M6）
+    output wire       tx_busy_o      // TX 忙（含已排队的 tx_req），给直方图让线（M6）
 );
 ```
 
-| 命令（2 字节帧：命令字符 + 1 字节参数） | 作用 |
+| 命令（`T/V/M/A/B/S` 为 2 字节帧；`R/H` 为单字节） | 作用 |
 | --- | --- |
-| `'T' <byte>` | `thr_high = byte`（`thr_low` 自动 = `byte>>1`，保持 2:1） |
+| `'T' <byte>` | **写入即生效**：`thr_high = byte`（`thr_low = byte>>1`），`thr_valid_o` 出一个单拍脉冲送按键控制器（串口优先于按键，量程 0..255） |
 | `'V' <byte>` | `view = byte[1:0]`（§6 表） |
 | `'M' <byte>` | `mode = byte[1:0]`（§5 表） |
+| `'S' <byte>` | `smooth = byte[1:0]`（>2 按 2 截断），`smooth_valid_o` 出一个单拍脉冲送按键控制器（串口优先于 K1） |
 | `'A' <byte>` | `gain_r = byte`（AWB 的 **R 通道增益**，1/64 定点：`byte/64`，量程 0..3.98×）。复位值 **112** = ×1.75（2026-10-15 上板对白墙二分调出的中性点；改前写死的是 `409/256` ≈ ×1.59，偏青） |
 | `'B' <byte>` | `gain_b = byte`（AWB 的 B 通道增益，同上）。复位值 **96** = ×1.5 = 老的 `384/256` |
-| `'R'` | 回读，回发 6 字节 `{thr, view, mode, gain_r, gain_b, '\n'}` |
+| `'R'` | 回读，回发 7 字节 `{thr, view, mode, gain_r, gain_b, smooth, '\n'}`；`thr`/`smooth` 直接采 `thr_read_i`/`smooth_read_i`，即**按键调过之后的实际生效值** |
+| `'H'` | 请求一次**片内 Y 直方图**；立即无回包，等下一个 vsync 统计完整一帧后回 778 字节（§7.1） |
 | 其他 | 一律忽略（回车/换行/空格不会误触发） |
+
+> **阈值/平滑来源（2026-10-17 起：按键 + 串口双路）**：`image_pipeline_top.thr_i` 与
+> `smooth_mode_i` 接 `canny_threshold_key_ctrl`，20 ms 消抖：
+> **K1 循环平滑** `1→2→0→1`；**K2 循环阈值** 4..48、**步长 1**，48 再按回到 4
+> （回绕，不是饱和）。串口 `'T'`/`'S'` 通过 `thr_valid_o`/`smooth_valid_o`
+> 直接写入，**优先于按键且阈值不受步长限制**；串口阈值在 4..48 内时 K2 从该值
+> 继续 +1，越界（含 0..3、49..255）时下一次 K2 先回到 4。
+> `'R'` 的第 1/6 字节直接采实际生效寄存器，按键改过之后也准确。
+> `view` / `mode` / AWB 增益仍由串口实时生效。
 
 > `'A'` / `'B'` 是 2026-10-15 上板实测"**白墙在正常室内白灯下发青**"（= 相机链路 R 通道偏低）
 > 之后加的：调这个系数要好几个来回，所以做成运行时旋钮而不是改 `example_top.v` 里的常数反复综合。
-> **默认行为不变**：复位值 102/96 与老常数只差 0.25%/0%，不插串口时画面与改动前一致。
+> **默认值**：R **112** = ×1.75（比旧的写死值 ×1.59 高约 9.5%，是 10-15 对白墙
+> 调出来的中性点），B **96** = ×1.5（与旧的 `384/256` 相同）。不插串口时就用这两个值。
 > 调参流程：发 `'A' <byte>` → 发 `'R'` 确认第 4 个字节是刚发的值 → 看画面（对着**白墙/白纸**调，
 > 目标是中性白）。`byte/64` 换算：×2.0 = 128(0x80)，×2.5 = 160(0xA0)，×3.0 = 192(0xC0)。
 
 > **★ 参数是"原始字节"，不是十进制文本——上板最容易踩的坑（2026-10-15 实际踩了）**
 >
-> `T`/`V`/`M` 后面**紧跟的那个字节就是参数本身**，协议里没有分隔符。想设 `thr=16`
-> 必须发 `54 10` 两个字节。如果按人话发 `T 16`（四个字节 `54 20 31 36`），被吃掉的参数是
-> **空格 `0x20` = 32**：`thr` 会**静默地**变成 32（这个值还在合法量程内，所以看不出错），
+> **注意**：下面用 `T` 举例只是因为它的参数最容易被写成文本；
+> 同样的字节规则适用于 `V`/`M`/`A`/`B`，它们都会改画面。
+>
+> `T`/`V`/`M` 后面**紧跟的那个字节就是参数本身**，协议里没有分隔符。想让
+> `thr` 变成 16 必须发 `54 10` 两个字节。如果按人话发
+> `T 16`（四个字节 `54 20 31 36`），被吃掉的参数是
+> **空格 `0x20` = 32**：`thr` 会**静默地**变成 32（这个值还在合法量程内，画面上只是边更少），
 > 后面的 `1`/`6` 作为未知命令被忽略。`V 02` 同理 → `view = 0x20 & 3 = 0`，
 > **假彩图视图从来没生效过**，屏幕一直是 view 0 的二值边缘图——"边缘只有白边没有别的颜色"
 > 是 view 0 的定义，不是观察结果。
@@ -276,18 +329,22 @@ module uart_cmd #(
 >
 > | 想做的事 | 发送字节 | 回读确认 |
 > | --- | --- | --- |
-> | 回读当前状态 | `52` | 期望 `0C 00 03 70 60 0A`（复位后：thr=12、view=0、mode=3、R 增益 112、B 增益 96） |
-> | `thr=16`（`thr_low` 自动 8） | `54 10` | 第 1 字节 `10` |
-> | `thr=8`（弱边 4，噪声余量最小） | `54 08` | 第 1 字节 `08` |
-> | `view=2`（四类假彩图） | `56 02` | 第 2 字节 `02` |
+> | 回读当前状态 | `52` | 期望 `0C 00 03 70 60 01 0A`（复位后：thr=12、view=0、mode=3、R 增益 112、B 增益 96、smooth=1） |
+> | `thr=5`（画面立即生效） | `54 05` | 第 1 字节 `05` |
+> | `thr=6`（画面立即生效） | `54 06` | 第 1 字节 `06` |
+> | `thr=7`（画面立即生效） | `54 07` | 第 1 字节 `07` |
+> | `view=2`（五状态假彩图） | `56 02` | 第 2 字节 `02` |
 > | `view=3`（Y 图，量 ΔY 用） | `56 03` | 第 2 字节 `03` |
 > | `mode=0`（旁路原图） | `4D 00` | 第 3 字节 `00` |
+> | `mode=2`（左灰度右边缘） | `4D 02` | 第 3 字节 `02` |
+> | 平滑 S0 标准高斯 | `53 00` | 第 6 字节 `00` |
+> | 平滑 S2 完全旁路 | `53 02` | 第 6 字节 `02` |
 > | AWB R 增益 ×2.5 | `41 A0` | 第 4 字节 `A0` |
 > | AWB R 增益回到复位默认 ×1.75 | `41 70` | 第 4 字节 `70` |
 > | AWB B 增益 ×1.5（默认） | `42 60` | 第 5 字节 `60` |
 >
-> **纪律：每发一条参数命令，跟一个 `52` 回读**，回包 `{thr, view, mode, gain_r, gain_b, '\n'}`
-> 逐字节核对。
+> **纪律：每发一条会改画面的参数命令（`T`/`V`/`M`/`S`/`A`/`B`），跟一个 `52` 回读**，
+> 回包 `{thr, view, mode, gain_r, gain_b, smooth, '\n'}` 逐字节核对。
 > 下一版 `uart_cmd` 计划给 `T`/`V`/`M` 加自动回显并接受十进制文本（`CANNY_PLAN.md` §12.2），
 > 在那之前只能靠这条纪律。
 
@@ -299,10 +356,49 @@ module uart_cmd #(
 - 两处刻意的省略（见 `uart_cmd.v` 注释）：没有单独设 `thr_low` 的 `'L'`（等滞回按 `CANNY_PLAN.md`
   §3.7 重做再加）；参数帧没有超时保护（调试口，可接受）。
 - **回包时机（写主机端脚本时要注意）**：DUT 在收到 `'R'` 的**停止位中点**（≈9.5 位）就结束收字节并
-  立即起发，回包的 4 个字节是**背靠背连发**的（字节间隔 = 1 个停止位）。也就是说回包的第一个起始沿
+  立即起发，回包的 7 个字节是**背靠背连发**的（字节间隔 = 1 个停止位）。也就是说回包的第一个起始沿
   可能比主机"发完这一帧"还早半个位 —— `rx`（主机→DUT）与 `tx`（DUT→主机）是两根线、互不冲突，
   普通 USB-UART 的接收端是常开的，不会有问题；但**主机端若写成"先发完再打开接收"就会错过第一个
   字节的开头**（现象是回读值整体错位一位，如 0x08 读成 0x84）。仿真台第一版正是这么错的，
   详见 `sim/tb_uart_cmd.v` 里 `send_cmd_nostop` 的注释。
 - 回归：`sim/tb_uart_cmd.v`（`sim/run.sh` 第 4 段，用真实参数 74.25 MHz / 460800），
   变异测试 `sim/mut_uart.py`（确认这个台子真的会 FAIL，不是假绿）。
+
+### 7.1 片内灰度直方图回传（`gray_hist_uart`，M6）
+
+没有 HDMI 采集卡时，用这条路径量 Canny 实际输入的 Y 分布。
+Y 来自 `image_pipeline_top` 的 `dbg_y_o/dbg_de_o/dbg_vs_o`（§6），统计的是
+**3×3 中值之后、Canny 支路同一份灰度**，不是另算的近似（2026-10-17 起；
+要量原始 `rgb_to_gray` 输出需改接 `gray_y`）。
+
+`'H'` 到达后模块等下一个 `vsync` 上升沿，统计**完整一帧**，然后占用 TX 线回传：
+
+| 字节 | 内容 |
+| --- | --- |
+| `0..2` | `A5 5A 48`（magic + 命令 `'H'`） |
+| `3..4` | `frame_id`，16 bit 小端，每测一帧 +1 |
+| `5..7` | `frame_total`，24 bit 小端，本帧统计到的 de 像素数（1280×720 应为 921600） |
+| `8..775` | 256 个 bin × 3 字节小端（20 bit），`bin[i]` = 本帧 Y==i 的像素数 |
+| `776..777` | checksum，16 bit 小端 = `sum(bytes[0..775]) & 0xFFFF` |
+
+- 长度固定 778 字节，460800 8N1 下约 **16.9 ms**；加上等下一个 vsync（≤ 2 帧），
+  从发 `'H'` 到收完通常 **< 50 ms**。
+- 每次 `'H'` 只测一帧，回传后自动清零再等下一条命令；`sum(bins)` 应等于
+  `frame_total`，可用来验帧边界和累加。
+- **仲裁**：测量/回传期间直方图的 `busy_o` 把 `uart_cmd` 的 RX 强制拉成空闲，
+  这期间发的命令会被**丢弃**（不排队）；回传前会等 `uart_cmd.tx_busy_o` 落低，
+  不会和 `'R'` 的回包撞线。流程是：发 `'H'` → 收满 778 字节 → 再发别的命令。
+- 主机脚本：`python sim/read_hist.py --port COM5`（Windows 走 Win32 API、
+  Linux/WSL 走 termios，**不需要 pyserial**）。它发 `'H'`、校验
+  magic / checksum / `sum(bins)==frame_total`，并用与 `sim/gray_hist.py`
+  相同的口径打印直方图和 p1/p50/p99/削顶比例；`--json` 存结果，
+  `--file` 可离线重放已保存的流。
+- 资源（2026-10-17 `efx_map` 实测）：`u_gray_hist` **225 FF / 56 ADD /
+  1 EFX_RAM10 / 0 DSP**，其中 256×20 bit 的 `hist_mem` 占 1 块 RAM10，
+  `u_uart_tx` 21 FF。详见 `docs/ARCH.md` §4「M6b」。
+- **局限**：只有 256 个 bin，**算不了** `mag8` 过阈比例和空间分布。
+  要回答“低对比度人脸轮廓能不能出边”，仍要抓 `view=3` 的整帧图跑
+  `sim/gray_hist.py --roi/--grid`；直方图只负责回答“整体偏暗/削顶”。
+- 回归：`sim/tb_gray_hist_uart.v`（`sim/run.sh` 第 6 段：帧边界、同 bin 连续
+  累加、字节序、checksum、`sum(bins)==total`）；`'H'` 命令本身在
+  `sim/tb_uart_cmd.v` 第 10 项。
