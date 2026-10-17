@@ -55,7 +55,8 @@
 7. **Canny 的阈值口刻度不是 0..255，有效量程只有 0..96**（横竖边）。默认 12（要求 ΔY ≥ 32 ≈ 满幅 13%；
    2026-10-15 上板扫出来的工作点，之前是 16），
    **不要超过 48**。调参、排查"边缘出不来"之前先看 `docs/CANNY_PLAN.md` §3.8 的标尺表，
-   或直接跑 `python3 sim/color_probe.py`。板上可以用串口运行时改阈值（`docs/INTERFACE.md` §7）。
+   或直接跑 `python3 sim/color_probe.py`。板上串口命令的当前格式、回包解析和调试流程见
+   [`docs/UART_COMMAND_REFERENCE.md`](docs/UART_COMMAND_REFERENCE.md)。
    **串口是二进制协议，不是文本**：设 `thr=16` 要发十六进制 `54 10`，发成 `T 16` 会被吃掉参数里的
    空格（`0x20`=32）而静默改成 32 —— 空格字节表现成"命令发出去了但没生效"。字节表见 `INTERFACE.md`
    §7，**每发一条参数命令跟一个 `52` 回读核对**（回包 6 字节：`thr view mode gain_r gain_b '\n'`）。

@@ -227,6 +227,10 @@ module image_pipeline_top #(
 
 ## 7. 串口命令口 `uart_cmd`（调试用，非流水线接口）
 
+> **当前版本说明：**本节保留了早期 460800 bit/s、6 字节回包阶段的设计记录。当前可操作手册
+> 已独立整理到 [`UART_COMMAND_REFERENCE.md`](UART_COMMAND_REFERENCE.md)：实际配置为 **115200-8N1**，
+> `R` 返回 7 字节，并增加了 `S` 平滑模式命令及 KEY1/KEY2 联动。现场使用时以该手册和 RTL 为准。
+
 把 `thr / view / mode` 从"编译期 localparam"变成"运行时可调"，现场调参不用重新综合
 （一次综合约 10 分钟）。**不接入流水线数据通路**，所以不属于 I-A/I-B/I-C 任何一条接口。
 
