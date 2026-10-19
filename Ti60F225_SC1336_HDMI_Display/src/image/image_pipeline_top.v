@@ -17,6 +17,7 @@
 //   median_filter_3x3  1 拍（组合中值 + 输出寄存）
 //   pix_window (后)    2 拍（中值像素流重新构 3x3 邻域）
 //   canny_edge        12 拍（S1~S12 流水，逐级见 canny_edge.v 头注释）
+//                     2026-10-19 增加方向约束流式反馈（link_en_i），不增加拍数
 //   image_mix          1 拍（唯一输出寄存器）
 //   -------------------------------------------------
 //   合计              19 拍
@@ -56,13 +57,19 @@
 //   要单独调阈值/视图，改 example_top 里的寄存器（默认走 UART 可运行时调）。
 //
 // 【view_i】边缘支路显示什么（M5 新增，默认 0 = 原来的二值边缘图）：
-//   0 二值边缘图 / 1 mag8 灰度图 / 2 五状态假彩图 / 3 Y 灰度图。
+//   0 二值边缘图 / 1 mag8 灰度图 / 2 六状态假彩图 / 3 Y 灰度图。
 //   详细口径见下方第 5 节的注释。view_i 只影响边缘支路的像素内容，**不影响
 //   延迟**（四种视图的组合路径都在 image_mix 之前，由 image_mix 统一寄存）。
 //
 // 【smooth_mode_i】Canny 高斯前级的平滑程度（诊断分支合并）：
 //   0 标准 1:2:1 高斯 / 1 弱平滑（高斯与原像素 1:1）/ 2 完全旁路。
 //   模式在帧边界锁存，帧中改值不会在画面中间产生横向接缝；延迟不变。
+//
+// 【link_en_i】方向约束流式反馈开关（2026-10-19）：
+//   1 = 弱边可以沿自己的切向传播、接到已保留的边缘上（长弱链不再只剩贴
+//   强边的两三个像素）；0 = 退回原来的单遍滞后，edge_o 与加此功能前逐位
+//   一致。在 canny_edge 的 vsync 上升沿锁存，帧内切换无接缝；**不影响延迟**。
+//   view=2 把"仅因传播才保留"的弱边画成绿色，见第 5 节。
 //=====================================================================
 module image_pipeline_top #(
     parameter IMG_W       = 1280,
@@ -82,6 +89,7 @@ module image_pipeline_top #(
     input  wire [1:0]  mode_i,       // 含义见 image_mix（0 原图 / 1 边缘 / 2、3 分屏）
     input  wire [1:0]  view_i,       // 边缘支路显示什么，见下方【view_i】
     input  wire [1:0]  smooth_mode_i,// 0 标准高斯 / 1 弱平滑 / 2 完全旁路
+    input  wire        link_en_i,    // 1 = 切向流式反馈开；0 = 退回单遍滞后
     output wire        vsync_o,
     output wire        de_o,
     output wire [23:0] rgb_o,
@@ -228,6 +236,7 @@ module image_pipeline_top #(
     wire [7:0]  can_mag8;             // 真实阈值域 mag8（未饱和），调试用
     wire [1:0]  can_cls;              // 判决分类：00/01/10/11，调试用
     wire        can_edge;
+    wire        can_link;             // 仅因切向传播才保留的弱边，调试用
 
     // 单一阈值口 → 双阈值（2:1），见文件头的【thr_i】
     wire [7:0]  thr_high = thr_i;
@@ -248,6 +257,7 @@ module image_pipeline_top #(
         .thr_high_i (thr_high),
         .thr_low_i  (thr_low),
         .smooth_mode_i (smooth_mode_i),
+        .link_en_i  (link_en_i),
 
         .vsync_o (can_vs),
         .de_o    (can_de),
@@ -256,6 +266,7 @@ module image_pipeline_top #(
         // 不破坏已冻结的 I-B 语义与 sobel 的视觉对照，这里不再往外引。
         .mag_o   (),
         .edge_o  (can_edge),
+        .link_o  (can_link),
         .mag8_o  (can_mag8),
         .cls_o   (can_cls)
     );
@@ -267,12 +278,15 @@ module image_pipeline_top #(
     //        阈值面直接可读：thr=16 落在灰度 32、thr=40 落在 80，满对比度黑边
     //        （mag8=96）落在 192。**不能拿 mag_o 调阈值**——它在 mag8>32 就饱和
     //        （见 canny_edge.v 的 mag8_o 注释）。
-    //    2 = 五状态假彩图（"判死器"，诊断分支合并）：
+    //    2 = 六状态假彩图（"判死器"，诊断分支合并；2026-10-19 加绿色）：
     //          黑  = 无响应（mag8 < thr_low，该处真的没梯度）
     //          深红 = 有梯度但被 NMS 抑制
     //          黄  = 弱边（过 NMS，但未被滞后连接保留）
-    //          蓝  = 弱边，且被滞后连接保留
+    //          蓝  = 弱边，被原来的 8 邻域单遍滞后保留
+    //          绿  = 弱边，仅因切向流式传播才保留（link_en_i = 1 的新增部分）
     //          白  = 强边
+    //        绿色直接回答"新逻辑到底连了什么"：关掉 link_en_i 后绿色应全部消失，
+    //        原来蓝/黄/白的分布逐像素不变。
     //    3 = Y 灰度图（算法眼里的世界，中值后）。用来量 ΔY：屏幕上读出两侧
     //        灰度差，查 canny_edge.v 头注释的标尺表就知道该不该出边。
     //        ★ y_dly 只做时间对齐（14 拍），不做空间对齐：中值后的 Y 比原图
@@ -282,11 +296,12 @@ module image_pipeline_top #(
     wire [8:0] mag8x2      = {1'b0, can_mag8} << 1;
     wire [7:0] mag8_view   = mag8x2[8] ? 8'hFF : mag8x2[7:0];
 
-    // 弱边再按 can_edge（滞后连接结果）分成黄/蓝：诊断时能直接看出
-    // "弱梯度存在但没连上"和"弱梯度已保留"的区别。
+    // 弱边再按 can_edge（滞后/传播结果）分成黄/蓝/绿：诊断时能直接看出
+    // "弱梯度存在但没连上"、"被原来的单遍滞后保留"和"被切向传播连上"。
     wire [23:0] cls_rgb = (can_cls == 2'b11) ? 24'hFFFFFF :   // 强边     白
                           (can_cls == 2'b10) ?
-                              (can_edge ? 24'h0000FF :        // 弱边已连 蓝
+                              (can_link ? 24'h00FF00 :        // 传播保留 绿
+                               can_edge ? 24'h0000FF :        // 滞回连通 蓝
                                           24'hFFFF00) :       // 弱边未连 黄
                           (can_cls == 2'b01) ? 24'h800000 :   // NMS 抑制 深红
                                                24'h000000;    // 无响应   黑

@@ -12,10 +12,11 @@
 //     而测试台的位时长是按 460800 算的 —— 两边对不上会全错。这是本台子最容易
 //     被改坏的地方。
 //
-// 覆盖：复位默认值 / T·V·M·S 四条命令 / 'T'/'S' 写入单拍脉冲（thr_valid_o / smooth_valid_o）/
-//   'S' 参数 >2 截断到 2 / 越界参数按位宽截断 / 干扰字节（回车、换行、空格）被忽略 /
-//   未知命令**不会**把解析器卡在等参数状态 / 'R' 回读 7 字节（thr 来自 thr_read_i，
-//   即实际生效值）/ 'A'/'B' 调 AWB 增益 / 连发两帧（无帧间间隔）。
+// 覆盖：复位默认值 / T·V·M·S·L 五条参数命令 / 'T'/'S' 写入单拍脉冲
+//   （thr_valid_o / smooth_valid_o）/ 'S' 参数 >2 截断到 2 / 越界参数按位宽截断 /
+//   干扰字节（回车、换行、空格）被忽略 / 未知命令**不会**把解析器卡在等参数状态 /
+//   'R' 回读 8 字节（thr 来自 thr_read_i，即实际生效值）/ 'A'/'B' 调 AWB 增益 /
+//   连发两帧（无帧间间隔）。
 //
 // 用法（sim/run.sh 已挂）： verilator --binary --timing ... ; ./Vtb_uart_cmd
 //=====================================================================
@@ -41,6 +42,7 @@ module tb_uart_cmd;
     wire [1:0]  smooth_o;             // 'S' 平滑模式 0/1/2
     wire        smooth_valid;         // 'S' 写入单拍
     wire [7:0]  gain_r_o, gain_b_o;   // AWB 增益（1/64 定点）
+    wire        link_o;               // 'L' 方向约束流式反馈开关
     wire        hist_req;             // 'H' 单拍（M6）
     wire        tx_busy;              // TX 忙（含待发请求）
 
@@ -69,6 +71,7 @@ module tb_uart_cmd;
         .thr_o (thr_o), .thr_valid_o (thr_valid),
         .view_o (view_o), .mode_o (mode_o),
         .smooth_o (smooth_o), .smooth_valid_o (smooth_valid),
+        .link_o   (link_o),
         .gain_r_o (gain_r_o), .gain_b_o (gain_b_o),
         .hist_req_o (hist_req), .tx_busy_o (tx_busy)
     );
@@ -121,7 +124,7 @@ module tb_uart_cmd;
     integer   kk;           // 只给 recv_byte 用
     integer   j;            // 只给调用方的循环用
     reg [7:0] rxb;
-    reg [7:0] rb [0:6];         // 回包 7 字节 {thr, view, mode, gain_r, gain_b, smooth, '\n'}
+    reg [7:0] rb [0:7];         // 回包 8 字节 {thr, view, mode, gain_r, gain_b, smooth, link, '\n'}
     reg       rx_ok;        // recv_byte 的结果标志
     integer   wt;           // recv_byte 的超时计数
 
@@ -221,6 +224,7 @@ module tb_uart_cmd;
         chk("复位 smooth", {6'b0, smooth_o}, 8'd1);  // 默认弱平滑
         chk("复位 R 增益", gain_r_o, 8'd112);   // ×1.75，上板对白墙调出来的中性点
         chk("复位 B 增益", gain_b_o, 8'd96);    // ×1.5（沿用基线 384/256）
+        chk("复位 link 开", {7'b0, link_o}, 8'd1);
 
         //--------------------------------------------------------------
         // 2) 'T' 设阈值（thr_low 由 RTL 内部取 >>1，不出现在这个口上）
@@ -257,6 +261,17 @@ module tb_uart_cmd;
         chk("S 不影响 thr", thr_o, 8'd0);
 
         //--------------------------------------------------------------
+        // 3c) 'L' 方向约束流式反馈开关：1 开 / 0 关，只取 bit0。
+        //     上板"不重新综合对比开/关"就靠它，回读第 7 字节确认。
+        //--------------------------------------------------------------
+        send_byte(8'h4C, 1); send_byte(8'h00, 1);      // 'L' 0x00 → 关
+        chk("L 0x00 关", {7'b0, link_o}, 8'd0);
+        send_byte(8'h4C, 1); send_byte(8'hFE, 1);      // 'L' 0xFE → 只取 bit0 = 0
+        chk("L 0xFE 只取 bit0", {7'b0, link_o}, 8'd0);
+        send_byte(8'h4C, 1); send_byte(8'h01, 1);      // 'L' 0x01 → 开
+        chk("L 0x01 开", {7'b0, link_o}, 8'd1);
+
+        //--------------------------------------------------------------
         // 4) 干扰字节（回车/换行/空格）必须被忽略，不能当成命令或参数
         //--------------------------------------------------------------
         send_byte(8'h0D, 1); send_byte(8'h0A, 1); send_byte(8'h20, 1);
@@ -275,11 +290,11 @@ module tb_uart_cmd;
         chk("未知命令不误出写入脉冲", thr_valid_cnt, 8'd3);
 
         //--------------------------------------------------------------
-        // 6) 'R' 回读 7 字节 {thr, view, mode, gain_r, gain_b, smooth, '\n'}
-        //    当前状态：thr=8、view=3、mode=1、smooth=1，增益还是复位默认 112/96
+        // 6) 'R' 回读 8 字节 {thr, view, mode, gain_r, gain_b, smooth, link, '\n'}
+        //    当前状态：thr=8、view=3、mode=1、smooth=1、link=1，增益默认 112/96
         //--------------------------------------------------------------
         send_cmd_nostop(8'h52);                         // 'R'
-        for (j = 0; j < 7; j = j + 1) begin
+        for (j = 0; j < 8; j = j + 1) begin
             recv_byte;
             rb[j] = rxb;
             if (!rx_ok) begin
@@ -293,7 +308,8 @@ module tb_uart_cmd;
         chk("回读 R 增益复位值", rb[3], 8'd112);        // 112/64 = ×1.75（上板调的中性点）
         chk("回读 B 增益复位值", rb[4], 8'd96);         // 96/64 = ×1.5 = 原 384/256
         chk("回读 smooth", rb[5], 8'd1);
-        chk("回读结尾换行", rb[6], 8'h0A);
+        chk("回读 link", rb[6], 8'd1);
+        chk("回读结尾换行", rb[7], 8'h0A);
 
         //--------------------------------------------------------------
         // 7) AWB 增益 'A'/'B'（1/64 定点，量程 0..3.98×）
@@ -330,7 +346,7 @@ module tb_uart_cmd;
         send_byte(8'h41, 1); send_byte(8'hC8, 1);      // 'A' 0xC8 = 200 → ×3.125
         send_byte(8'h42, 1); send_byte(8'h50, 1);      // 'B' 0x50 =  80 → ×1.25
         send_cmd_nostop(8'h52);
-        for (j = 0; j < 7; j = j + 1) begin
+        for (j = 0; j < 8; j = j + 1) begin
             recv_byte;
             rb[j] = rxb;
             if (!rx_ok) begin
@@ -340,7 +356,8 @@ module tb_uart_cmd;
         end
         chk("回读改后的 R 增益", rb[3], 8'd200);
         chk("回读改后的 B 增益", rb[4], 8'd80);
-        chk("回读改后仍以换行结尾", rb[6], 8'h0A);
+        chk("回读 link 仍为开", rb[6], 8'd1);
+        chk("回读改后仍以换行结尾", rb[7], 8'h0A);
 
         //--------------------------------------------------------------
         // 9b) 'R' 的 thr/smooth 字节取的是 thr_read_i / smooth_read_i
@@ -352,7 +369,7 @@ module tb_uart_cmd;
         ext_smooth_read = 2'd2;
         ext_hold        = 1'b1;
         send_cmd_nostop(8'h52);
-        for (j = 0; j < 7; j = j + 1) begin
+        for (j = 0; j < 8; j = j + 1) begin
             recv_byte;
             rb[j] = rxb;
             if (!rx_ok) begin
@@ -378,12 +395,12 @@ module tb_uart_cmd;
 
         //--------------------------------------------------------------
         // 11) tx_busy_o：'R' 回包期间为 1，回包结束后回 0。
-        //     直方图模块靠它避让在途回包，错了会在板上把 7 字节回包截断。
+        //     直方图模块靠它避让在途回包，错了会在板上把 8 字节回包截断。
         //--------------------------------------------------------------
         send_cmd_nostop(8'h52);                 // 'R'
         repeat (2 * DIV) @(posedge clk);
         chk("R 回包期间 tx_busy", {7'b0, tx_busy}, 8'd1);
-        for (j = 0; j < 7; j = j + 1) begin
+        for (j = 0; j < 8; j = j + 1) begin
             recv_byte;
             rb[j] = rxb;
             if (!rx_ok) begin

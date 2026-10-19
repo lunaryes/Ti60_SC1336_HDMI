@@ -4,8 +4,15 @@
 //---------------------------------------------------------------------
 // 硬件近似版 Canny 边缘检测（方案见 docs/CANNY_PLAN.md）。
 //
-// 【当前版本：M3 —— 全套：高斯 + 梯度 + 幅值 + 方向量化 + NMS + 双阈值滞后】
-//   在 M2 之上补完 §3.7/§3.8 的双阈值 + 单遍滞后。算法到此完整，只差接顶层。
+// 【当前版本：M3 + 方向约束流式反馈（2026-10-19，link_en_i / link_o）】
+//   M3 = 全套：高斯 + 梯度 + 幅值 + 方向量化 + NMS + 双阈值滞后。
+//   2026-10-19 在 M3 的 S11 里加了一条"沿边缘切向的流式反馈"：弱边如果沿着
+//   自己的切向连到已经保留的边缘（强边或已传播的弱边），也保留。这条路径把
+//   §3.7 的"单遍滞后"从"强边集外扩 1 像素"升级成**能沿弱链真正传播**，但仍是
+//   单方向递推（只看 raster 扫描已经走过的三个切向邻居，链沿扫描方向生长）。
+//   ★ 该功能**不增加流水线拍数**（LATENCY 仍是 12），可用 link_en_i 运行时关掉；
+//     关掉后 edge_o 与 M3 逐位一致。link_o 标出"仅因传播才保留"的弱边像素，
+//     view=2 用它把这些像素画成绿色（见 image_pipeline_top）。
 //   edge_o 的宽度：斜 45°/135° 实测最大 1 个像素，横/竖因方案 §11 决议 2 的
 //   "平局保留"最多相邻 2 个像素，均与参考模型逐点一致。
 //   端口与 sobel_edge 的差别只有阈值口：sobel 是单个 thr_i，这里是 thr_high_i /
@@ -32,8 +39,29 @@
 //   mag8 = mag >> 3                                 0..255，内部判据域（§3.8）
 //   strong = NMS 过 && mag8 >= thr_high_i
 //   weak   = NMS 过 && mag8 >= thr_low_i
-//   edge   = strong || (weak && 8 邻域内含 strong)  ← 单遍滞后（§3.7，非递归）
+//   edge   = strong || (weak && 8 邻域内含 strong) || link
+//   link   = link_en && weak && 切向的"已走过"邻居是 edge 且方向相邻
 //   系数 2 全部用左移一位（位拼接）实现，无乘法器、不占 DSP。
+//
+// ★ 方向约束流式反馈（2026-10-19）
+//   单遍滞后的缺陷（§3.7）：弱链只有紧贴强边的一两个像素能活下来，再往里
+//   全被截断。这里利用 S8 已经算好的方向 dir 和 S11 已经算好的 edge 结果，
+//   沿**边缘切向**把"已经保留"的状态传给下一个像素。raster 扫描下每个中心
+//   像素只可能从三个"过去"的切向邻居收到反馈（切向与扫描方向的交点）：
+//     dir=00（梯度 0°，边竖直）  → 上      (R-1, C)
+//     dir=01（梯度 90°，边水平） → 左      (R, C-1)
+//     dir=10（梯度 45°，边 135°）→ 右上    (R-1, C+1)
+//     dir=11（梯度 135°，边 45°）→ 左上    (R-1, C-1)
+//   另外要求邻居的梯度扇区与本像素**相同或相邻**（扇区按 00→10→01→11 的
+//   角度顺序循环，135° 与 0° 相邻），这样拐角处切向突变 90°（差两个扇区）
+//   时不会硬连过去。反馈存 3 bit/像素 {dir, edge}，两个 1280×3 bank 按行
+//   ping-pong（与 canny_win3x3 同一套 bank 轮转），只用 4 块 EFX_RAM10。
+//   ★ 传播是**单向**的：每条弱链只能从 raster 顺序上更早的一端长出来；链的
+//     起点必须已经是一个 strong 或单遍滞后保留的像素。没有种子的孤立弱链
+//     仍然整条丢弃（这是与"连通域递归"的关键区别，也是流式架构的代价）。
+//   ★ 前 7 行、左 3 列、右 2 列禁止传播：行缓存/边界复制在帧首和列边界有
+//     已知暂态，反馈只在干净区启动；仿真参考模型用同样的门限（见
+//     sim/canny_ref.py 的 LINK_GATE_*），否则启动差异会沿链一路传下去。
 //
 // ★★ 阈值口的量程（M5 标定事故的结论，调阈值前必读）★★
 //   mag8 = mag>>3 是按理论满量程 2040 折算 0..255 的，但 3x3 高斯把 Sobel 的 4A
@@ -119,11 +147,13 @@ module canny_edge #(
     input  wire [7:0]  thr_high_i,
     input  wire [7:0]  thr_low_i,
     input  wire [1:0]  smooth_mode_i, // 0=Gaussian, 1=weak, 2=bypass
+    input  wire        link_en_i,     // 方向约束流式反馈开关（vsync 上升沿锁存）
 
     output reg         vsync_o,
     output reg         de_o,
     output reg  [7:0]  mag_o,
     output reg         edge_o,
+    output reg         link_o,        // 仅因切向传播才保留的弱边（调试，view=2 绿）
 
     //-----------------------------------------------------------------
     // 调试观测口（M5 新增，排查"只认高对比度"问题时加的）
@@ -159,14 +189,18 @@ module canny_edge #(
     // UART command received mid-frame from creating a horizontal seam.
     reg         vsync_mode_d;
     reg  [1:0]  smooth_mode_active;
+    reg         link_en_active;
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             vsync_mode_d      <= 1'b0;
             smooth_mode_active <= 2'd0;
+            link_en_active     <= 1'b0;
         end else begin
             vsync_mode_d <= vsync_i;
-            if (vsync_i && !vsync_mode_d)
+            if (vsync_i && !vsync_mode_d) begin
                 smooth_mode_active <= smooth_mode_i;
+                link_en_active     <= link_en_i;
+            end
         end
     end
 
@@ -401,12 +435,13 @@ module canny_edge #(
     //   （方案 §11 决议 2：不丢数据，宁可留粗一点也不把单像素线打断）。
     //   比较用**未饱和的 12bit 幅值**，不用 8bit 饱和值。
     //   滞后：strong = NMS 过且 mag8 >= thr_high；weak = NMS 过且 mag8 >= thr_low；
-    //        edge = strong || (weak && 8 邻域内有 strong)。
+    //        edge = strong || (weak && 8 邻域内有 strong) || link。
     //   ★ 阈值域：mag8 = mag >> 3（0..2040 → 0..255，单调、无饱和平台），
     //     与 sobel_edge 的 thr_i（先饱和到 255 再比）**不可混用**。
-    //   ★ 简化点（方案 §3.7 明示）：邻域的 strong 只看**未过 NMS 的原始幅值**，
-    //     不是"邻居也过了 NMS"——单遍传播，不是连通域递归；用同一个 3x3 梯度
-    //     窗，不额外加行缓存。
+    //   ★ 简化点（方案 §3.7 明示）：8 邻域的 strong 只看**未过 NMS 的原始幅值**，
+    //     不是"邻居也过了 NMS"——单遍邻域判定，不是连通域递归；用同一个 3x3
+    //     梯度窗，不额外加行缓存。link 是 2026-10-19 补的**切向单方向传播**，
+    //     见下面的 S11b；它不改变这段单遍判定的语义，只是额外多一条保留路径。
     //   ★ thr_low 配成大于 thr_high 时 weak ⊆ strong，退化成单阈值，不会出错。
     //-----------------------------------------------------------------
     wire [11:0] mag_c = m22[13:2];       // 中心幅值
@@ -448,7 +483,151 @@ module canny_edge #(
                      (mag8_of(m23) >= thr_high_i) || (mag8_of(m31) >= thr_high_i) ||
                      (mag8_of(m32) >= thr_high_i) || (mag8_of(m33) >= thr_high_i);
 
-    wire edge_c = strong_c || (weak_c && nb_strong);
+    //-------------------------------------------------------------
+    // S11b：方向约束流式反馈（link_en_i）
+    //   反馈存每像素 3 bit = {dir[1:0], edge}。两个 IMG_W×3 bank 按行轮转：
+    //   当前行写 bank(sel)，上一行从 bank(sel^1) 读。语义与 canny_win3x3 的
+    //   两 bank 完全一致，只是读地址要提前 2 列（见下面的预测式读地址）。
+    //
+    //   读地址为什么是 col+2：
+    //     需要的是"上一行、当前中心列的右邻" up-right = prev[C+1]。S11 的
+    //     中心列 C 在当拍，RAM 同步读要下一拍才出数，所以必须在 C-1 那拍就
+    //     把地址 C+1 发出去；即每拍发 fb_col+2。读出的 q 经两级移位得到
+    //     q=prev[C+1]（右上）、q_d1=prev[C]（上）、q_d2=prev[C-1]（左上）。
+    //   左邻不需要 RAM：C-1 的中心结果就是上一拍的 edge_c/dir_c，一个 3bit
+    //     寄存器即可（fb_left）。
+    //
+    //   边界门限（必须与 sim/canny_ref.py 的 LINK_GATE_* 完全一致）：
+    //     · 行 0..6 不传播：帧首行缓存没填满，edge 第 6 行起才干净；第 7 行
+    //       的切向种子只来自第 6 行（干净）。
+    //     · 列 0..2 不传播：读地址预测在行首前 3 拍还落在消隐期的历史值上。
+    //     · 列 W-2..W-1 不传播：行尾读地址进入 FB_LAST 钳位区，up-right
+    //       不再对应当前行的有效像素（留 2 列，与参考模型的 W-3 上界一致）。
+    //-------------------------------------------------------------
+    localparam integer FB_AW = (IMG_W <= 2) ? 1 : $clog2(IMG_W);
+    localparam [FB_AW-1:0] FB_LAST     = IMG_W - 1;
+    localparam [FB_AW-1:0] FB_COL_LAST2 = IMG_W - 2;
+    localparam [FB_AW-1:0] FB_COL_MAX  = IMG_W - 3;
+
+    reg [FB_AW-1:0] fb_col;          // 中心列号，与 mwin_de 同拍 0..IMG_W-1
+    reg             fb_bank_sel;     // 1 = bank1 是当前行（写），bank0 是上一行（读）
+    reg             fb_de_d;
+    reg             fb_vs_d;
+    reg [3:0]       fb_row_cnt;      // 饱和行计数，只用来屏蔽前 7 行
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            fb_col      <= {FB_AW{1'b0}};
+            fb_bank_sel <= 1'b0;
+            fb_de_d     <= 1'b0;
+            fb_vs_d     <= 1'b0;
+            fb_row_cnt  <= 4'd0;
+        end else begin
+            fb_de_d <= mwin_de;
+            fb_vs_d <= mwin_vs;
+
+            if (mwin_vs && !fb_vs_d) begin
+                fb_bank_sel <= 1'b0;
+                fb_row_cnt  <= 4'd0;
+            end else if (fb_de_d && !mwin_de) begin
+                // 行尾翻页；行计数在行尾递增，保证整行看到同一个行号
+                fb_bank_sel <= ~fb_bank_sel;
+                if (fb_row_cnt != 4'd15)
+                    fb_row_cnt <= fb_row_cnt + 1'b1;
+            end
+
+            if (!mwin_de)
+                fb_col <= {FB_AW{1'b0}};
+            else if (fb_col == FB_LAST)
+                fb_col <= {FB_AW{1'b0}};
+            else
+                fb_col <= fb_col + 1'b1;
+        end
+    end
+
+    wire [FB_AW-1:0] fb_rd_addr = (!mwin_de) ? {FB_AW{1'b0}} :
+                                  (fb_col >= FB_COL_LAST2) ? FB_LAST :
+                                  (fb_col + 2'd2);
+
+    reg [2:0] fb_bank0 [0:IMG_W-1];
+    reg [2:0] fb_bank1 [0:IMG_W-1];
+    reg [2:0] fb_q0, fb_q1;
+
+    // bank_sel=0: 写 bank0(当前行)，读 bank1(上一行)；=1 时互换。
+    wire [2:0] fb_prev = fb_bank_sel ? fb_q0 : fb_q1;
+
+    reg [2:0] fb_prev_d1, fb_prev_d2;
+    reg [2:0] fb_left;
+
+    // 按中心像素自己的方向选"切向的过去邻居"
+    reg [2:0] fb_seed;
+    always @(*) begin
+        case (dir_c)
+            2'b00:   fb_seed = fb_prev_d1;   // 上
+            2'b01:   fb_seed = fb_left;      // 左
+            2'b10:   fb_seed = fb_prev;      // 右上
+            default: fb_seed = fb_prev_d2;   // 左上
+        endcase
+    end
+
+    // 方向相邻判据：扇区角度顺序 00(0°)→10(45°)→01(90°)→11(135°)，
+    // 135° 与 0° 在 mod 180° 下相邻。差 2 个扇区（90°）= 拐角，不连。
+    function [1:0] dir_rank;
+        input [1:0] d;
+        begin
+            case (d)
+                2'b00:   dir_rank = 2'd0;
+                2'b10:   dir_rank = 2'd1;
+                2'b01:   dir_rank = 2'd2;
+                default: dir_rank = 2'd3;
+            endcase
+        end
+    endfunction
+
+    wire [1:0] dir_rank_c = dir_rank(dir_c);
+    wire [1:0] dir_rank_n = dir_rank(fb_seed[2:1]);
+    wire [1:0] dir_delta  = (dir_rank_c >= dir_rank_n) ?
+                            (dir_rank_c - dir_rank_n) :
+                            (dir_rank_n - dir_rank_c);
+    wire dir_compat = (dir_delta == 2'd0) || (dir_delta == 2'd3);
+
+    wire link_col_ok = (fb_col >= 2'd3) && (fb_col <= FB_COL_MAX);
+    wire link_row_ok = (fb_row_cnt >= 4'd7);
+    wire link_gate   = link_en_active && link_col_ok && link_row_ok;
+
+    // link 只标"本来会被丢掉、因为传播才留下"的弱边：
+    // 已由 strong / 单遍滞后保留的像素不置 link（颜色仍按原语义）。
+    wire link_c = link_gate && weak_c && !strong_c && !nb_strong &&
+                  fb_seed[0] && dir_compat;
+
+    wire edge_c = strong_c || (weak_c && nb_strong) || link_c;
+
+    // 行历史右移链 + 同列左邻寄存器。q/q_d1/q_d2 的列对齐见上面的读地址说明。
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            fb_prev_d1 <= 3'd0;
+            fb_prev_d2 <= 3'd0;
+            fb_left    <= 3'd0;
+        end else begin
+            fb_prev_d2 <= fb_prev_d1;
+            fb_prev_d1 <= fb_prev;
+            if (mwin_de)
+                fb_left <= {dir_c, edge_c};
+        end
+    end
+
+    // 反馈 RAM：单时钟、1 读 1 写，不做复位。当前行写、上一行读。
+    always @(posedge clk) begin
+        if (mwin_de && fb_bank_sel == 1'b0)
+            fb_bank0[fb_col] <= {dir_c, edge_c};
+        fb_q0 <= fb_bank0[fb_rd_addr];
+    end
+
+    always @(posedge clk) begin
+        if (mwin_de && fb_bank_sel == 1'b1)
+            fb_bank1[fb_col] <= {dir_c, edge_c};
+        fb_q1 <= fb_bank1[fb_rd_addr];
+    end
 
     // 调试判决分类（口径见文件头 cls_o）。按优先级串写而不是 {strong, weak}：
     // 方案 §3.7 允许 thr_low > thr_high（退化成单阈值），那时 strong ⊆ weak，
@@ -461,6 +640,7 @@ module canny_edge #(
     reg [7:0]  mag8_s11;
     reg [1:0]  cls_s11;
     reg        edge_s11;
+    reg        link_s11;
     reg        vsync_s11, de_s11;
 
     always @(posedge clk or negedge rst_n) begin
@@ -469,6 +649,7 @@ module canny_edge #(
             mag8_s11  <= 8'd0;
             cls_s11   <= 2'b00;
             edge_s11  <= 1'b0;
+            link_s11  <= 1'b0;
             vsync_s11 <= 1'b0;
             de_s11    <= 1'b0;
         end else begin
@@ -476,6 +657,7 @@ module canny_edge #(
             mag8_s11  <= mag8_c;
             cls_s11   <= cls_c;
             edge_s11  <= edge_c;
+            link_s11  <= link_c;
             vsync_s11 <= mwin_vs;
             de_s11    <= mwin_de;
         end
@@ -485,7 +667,9 @@ module canny_edge #(
     // S12：输出寄存
     //   mag_o 饱和到 8bit（与 sobel 的视觉亮度一致，取窗口中心那一像素）；
     //   edge_o = S11 算好的滞后结果，按 de 掩掉消隐期。
-    //   de 为 0 的区段两支输出都必须为 0（方案 §8 的仿真用例）。
+    //   link_o = "仅因切向传播才保留"的弱边标志（调试/假彩图用），与 edge_o
+    //     同拍同像素；link_en_i = 0 时恒为 0。
+    //   de 为 0 的区段所有输出都必须为 0（方案 §8 的仿真用例）。
     //   ★ mag_o 取窗口中心的幅值，与 edge_o 严格指向同一像素；这样板上 mag 图
     //     和 edge 图不会错位（代价是相对 M1 又多下移 1 行，见文件头空间对齐）。
     //-----------------------------------------------------------------
@@ -497,6 +681,7 @@ module canny_edge #(
             de_o    <= 1'b0;
             mag_o   <= 8'd0;
             edge_o  <= 1'b0;
+            link_o  <= 1'b0;
             mag8_o  <= 8'd0;
             cls_o   <= 2'b00;
         end else begin
@@ -504,6 +689,7 @@ module canny_edge #(
             de_o    <= de_s11;
             mag_o   <= de_s11 ? mag_sat : 8'd0;
             edge_o  <= de_s11 & edge_s11;
+            link_o  <= de_s11 & link_s11;
             // 调试口与 mag_o/edge_o 同一口径：de = 0 的区段一律出 0
             mag8_o  <= de_s11 ? mag8_s11 : 8'd0;
             cls_o   <= de_s11 ? cls_s11  : 2'b00;

@@ -1,20 +1,24 @@
 `timescale 1ns/1ps
 //=====================================================================
-// canny_edge 验证台（当前对应 M3：全套 高斯→梯度→幅值→方向→NMS→双阈值滞后）
+// canny_edge 验证台（M3 Canny + 2026-10-19 方向约束流式反馈）
 //---------------------------------------------------------------------
 // 结构与真实链路一致：pix_window_3x3 → canny_edge，输入是灰度流。
 // 激励图像由 sim/canny_ref.py 生成（同一套近似的 Python 参考模型），
 // 本测试台只负责按时序把图像灌进去、把指定帧的输出写出来。
 //
 // 运行方式（见 sim/run.sh）：
-//   ./obj_dir/Vtb_canny_edge +STIM=xxx.hex +OUT=xxx.txt [+SMOOTH=0|1|2]
-//   +SMOOTH 对应 canny_edge 的 smooth_mode_i，必须与 canny_ref.py --smooth 同值。
+//   ./obj_dir/Vtb_canny_edge +STIM=xxx.hex +OUT=xxx.txt [+SMOOTH=0|1|2] [+LINK=0|1]
+//   +SMOOTH 对应 canny_edge 的 smooth_mode_i，必须与 canny_ref.py --smooth 同值；
+//   +LINK   对应 link_en_i（方向约束流式反馈），必须与 canny_ref.py --link 同值。
+//
+// 输出每行 3 列：mag8 edge link（link = 仅因切向传播才保留的弱边）。
 //
 // 本地检查（不依赖 Python）：
 //   1) 对外延迟：src_de 上升沿 → canny_de 上升沿 必须是 WIN_LAT + LATENCY
-//   2) de = 0 的区段：mag_o / edge_o 必须为 0
+//   2) de = 0 的区段：mag_o / edge_o / link_o 必须为 0
 //   3) 每行有效像素数 = IMG_W（列对齐、不丢不重）
 //   4) 抓取从"本帧第一个输出行的行首"开始、抓满一帧（见下面的抓取注释）
+//   5) LINK=0 时 link_o 必须恒为 0（开关关掉不能有残留）
 //=====================================================================
 module tb_canny_edge;
 
@@ -57,10 +61,12 @@ module tb_canny_edge;
 
     reg [1023:0] stim_f, out_f;
     integer      smooth_arg = 0;                 // +SMOOTH=0/1/2，与 canny_ref.py --smooth 同步
+    integer      link_arg   = 0;                 // +LINK=0/1，与 canny_ref.py --link 同步
     initial begin
         if (!$value$plusargs("STIM=%s", stim_f)) stim_f = "stim.hex";
         if (!$value$plusargs("OUT=%s",  out_f))  out_f  = "out.txt";
         if (!$value$plusargs("SMOOTH=%d", smooth_arg)) smooth_arg = 0;
+        if (!$value$plusargs("LINK=%d",   link_arg))   link_arg   = 0;
         $readmemh(stim_f, mem);
     end
 
@@ -125,6 +131,7 @@ module tb_canny_edge;
     wire        canny_vs, canny_de;
     wire [7:0]  canny_mag;
     wire        canny_edge;
+    wire        canny_link;
 
     canny_edge #(
         .IMG_W   (IMG_W),
@@ -140,10 +147,12 @@ module tb_canny_edge;
         .thr_high_i (THR_HIGH[7:0]),
         .thr_low_i  (THR_LOW[7:0]),
         .smooth_mode_i (smooth_arg[1:0]),   // +SMOOTH，默认 0 = 标准 1:2:1 高斯
+        .link_en_i (link_arg[0]),           // +LINK，默认 0 = 关（与旧行为逐像素一致）
         .vsync_o (canny_vs),
         .de_o    (canny_de),
         .mag_o   (canny_mag),
-        .edge_o  (canny_edge)
+        .edge_o  (canny_edge),
+        .link_o  (canny_link)
     );
 
     //------------------------------------------------------------------
@@ -165,10 +174,13 @@ module tb_canny_edge;
     // 检查 2：消隐期输出必须为 0
     //------------------------------------------------------------------
     integer blank_err = 0;
+    integer link_pix  = 0;               // link_o 为 1 的像素总数（LINK=0 时必须为 0）
 
     always @(posedge clk) begin
-        if (rst_n && !canny_de && (canny_mag !== 8'd0 || canny_edge !== 1'b0))
+        if (rst_n && !canny_de &&
+            (canny_mag !== 8'd0 || canny_edge !== 1'b0 || canny_link !== 1'b0))
             blank_err = blank_err + 1;
+        if (rst_n && canny_de && canny_link) link_pix = link_pix + 1;
     end
 
     //------------------------------------------------------------------
@@ -203,7 +215,7 @@ module tb_canny_edge;
                 cap_on = 1'b1;
 
             if (cap_on && canny_de && fd != 0) begin
-                $fwrite(fd, "%02x %0d\n", canny_mag, canny_edge);
+                $fwrite(fd, "%02x %0d %0d\n", canny_mag, canny_edge, canny_link);
                 cap_cnt = cap_cnt + 1;
                 if (cap_cnt == IMG_W*IMG_H) cap_on = 1'b0;
             end
@@ -228,12 +240,14 @@ module tb_canny_edge;
         $display("BLANK_ERR %0d", blank_err);
         $display("ROWS %0d SHORT %0d LONG %0d", row_cnt, short_rows, long_rows);
         $display("CAPTURED %0d (期望 %0d)", cap_cnt, IMG_W*IMG_H);
+        $display("LINK_PIX %0d", link_pix);
         $fclose(fd);
 
         if ((de_rise_o - de_rise_i) != EXP_LAT) $display("FAIL: 延迟不符");
         if (blank_err != 0)                     $display("FAIL: 消隐期输出非 0");
         if (short_rows != 0 || long_rows != 0)  $display("FAIL: 行像素数不对");
         if (cap_cnt != IMG_W*IMG_H)             $display("FAIL: 抓取像素数不对");
+        if (!link_arg[0] && link_pix != 0)      $display("FAIL: LINK=0 但 link_o 有输出");
 
         $finish;
     end

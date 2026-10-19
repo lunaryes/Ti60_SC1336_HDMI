@@ -1129,7 +1129,7 @@ assign w_rgb_b = (w_rgb_b_mult >= 16'd16384) ? 8'hFF : w_rgb_b_sc[7:0];
 // 插入点：AWB 之后、FrameBoundCrop 之前（docs/ARCH.md §1），全部在 clk_pixel 单域
 // =========================================================================================================================================
 localparam IMG_MODE_DEF = 2'd3;  // 0=原图 1=边缘图 2=分屏(左灰度+右边缘) 3=画中画(暂等同分屏)
-localparam IMG_VIEW_DEF = 2'd0;  // 0=二值边缘图 1=mag8 图 2=五状态假彩图 3=Y 图
+localparam IMG_VIEW_DEF = 2'd0;  // 0=二值边缘图 1=mag8 图 2=六状态假彩图 3=Y 图
                                  // （四种视图的口径见 image_pipeline_top 的【view_i】）
 localparam IMG_THR_DEF  = 8'd12; // Canny 强边阈值（内部 mag8 = mag>>3 域，弱边 = 该值/2）
                                  // ★★ 从 40 → 16 → 12：原值 40 实际要求满幅 **42%** 的对比度
@@ -1142,6 +1142,10 @@ localparam IMG_THR_DEF  = 8'd12; // Canny 强边阈值（内部 mag8 = mag>>3 �
                                  //      平滑模式），上板后不插串口、不重综合就能改；
                                  //      见下面的 canny_threshold_key_ctrl 例化。
                                  //    ★ 若以后把采集端修好（AWB/曝光/换打印纸卡），可以再抬回 16。
+localparam IMG_LINK_DEF = 1'b1;  // 方向约束流式边缘连接复位值：1 开 / 0 关
+                                 //   'L' 命令可运行时切换（view=2 下绿色 = 仅因传播保留的弱边）；
+                                 //   关掉即退回"单遍滞后 + 1 像素膨胀"的旧行为，用来上板对比。
+                                 //   反馈用 2 块 IMG_W×3bit 行缓存（ping-pong），不增加流水线延迟。
 localparam IMG_LAT      = 19;    // = image_pipeline_top 的 LATENCY，两处必须一致
                                  //   （2026-10-17 接入 3x3 中值：+1 中值 +2 后级窗口）
 
@@ -1156,6 +1160,7 @@ wire                   [   1:0]         r_img_view                 ;
 wire                   [   1:0]         r_smooth_mode              ;   // uart_cmd 'S' 寄存器
 wire                                    r_smooth_valid             ;   // 同拍单脉冲
 wire                   [   1:0]         w_smooth_mode              ;   // 实际生效（按键也会改）
+wire                                    r_img_link                 ;   // uart_cmd 'L' 寄存器
 
 //---------------------------------------------------------------------
 // M6 片内灰度直方图（无采集卡时量 Y 分布）
@@ -1186,8 +1191,8 @@ assign uart_cmd_rx = hist_busy ? 1'b1 : uart_rx_i;
 // 引脚（GPIOT_N_16 / GPIOT_P_16），此前全工程从未引用。跑在 clk_pixel 域，
 // 与流水线同域，不需要 CDC。
 // 命令格式（2 字节帧：命令 + 参数）：'T'<thr> 'S'<smooth> 'V'<view> 'M'<mode>，
-// 'A'<AWB R 增益>，'B'<AWB B 增益>，'R' 回读 7 字节
-// {thr, view, mode, gain_r, gain_b, smooth, '\n'}。详见 src/common/uart_cmd.v。
+// 'A'<AWB R 增益>，'B'<AWB B 增益>，'L'<link_en>，'R' 回读 8 字节
+// {thr, view, mode, gain_r, gain_b, smooth, link, '\n'}。详见 src/common/uart_cmd.v。
 //
 // ★ 2026-10-17：**阈值/平滑串口控制**（与按键并存，串口优先）。
 //   thr_o/thr_valid_o、smooth_o/smooth_valid_o 接到下面
@@ -1201,7 +1206,8 @@ uart_cmd #(
     .BAUD     (460800),
     .THR_DEF  (IMG_THR_DEF),     // 'T' 写入前的回读值；与按键控制器默认值相同
     .VIEW_DEF (IMG_VIEW_DEF),
-    .MODE_DEF (IMG_MODE_DEF)
+    .MODE_DEF (IMG_MODE_DEF),
+    .LINK_DEF (IMG_LINK_DEF)     // 'L' 复位值：方向约束流式反馈默认开
 ) u_uart_cmd (
     .clk    (clk_pixel                 ),
     .rst_n  (rstn_pixel                ),
@@ -1216,6 +1222,7 @@ uart_cmd #(
     .mode_o (r_img_mode                ),
     .smooth_o (r_smooth_mode           ),   // 'S' 写入 → 按键控制器
     .smooth_valid_o (r_smooth_valid    ),   // 同拍单脉冲
+    .link_o   (r_img_link              ),   // 'L' 写入 → image_pipeline_top.link_en_i
 
     .gain_r_o (r_awb_gain              ),   // AWB R 增益（1/64 定点，复位 112 = ×1.75）
     .gain_b_o (b_awb_gain              ),   // AWB B 增益（复位 96 = ×1.50）
@@ -1266,6 +1273,7 @@ image_pipeline_top #(.IMG_W(1280),.IMG_H(720),.LATENCY(IMG_LAT)) u_image_pipelin
     .mode_i                            (r_img_mode                ),
     .view_i                            (r_img_view                ),
     .smooth_mode_i                     (w_smooth_mode             ),
+    .link_en_i                         (r_img_link                ),   // 'L' 运行时开关
 
     .vsync_o                           (pipe_vs                   ),
     .de_o                              (pipe_de                   ),

@@ -15,9 +15,11 @@
 //   2) mode 0 旁路：bin_rgb 与 rgb_i 延迟 IMG_LAT 逐像素一致，**每个时钟沿都比**
 //      （含消隐期：原图路径是纯寄存器延迟，image_mix 又不在 de=0 时清零）
 //   3) mode 1 的四种 view 各对一遍参考链：
-//        view 0 二值边缘图 / 1 mag8 图（min(mag8<<1,255)）/ 2 五状态假彩图 / 3 Y 图
-//        view 2 的五色：白 = 强边，蓝 = 弱边且滞回连通，黄 = 弱边但未连通，
-//        暗红 = NMS 抑制，黑 = 无响应
+//        view 0 二值边缘图 / 1 mag8 图（min(mag8<<1,255)）/ 2 六状态假彩图 / 3 Y 图
+//        view 2 的六色：白 = 强边，绿 = 仅因切向传播保留，蓝 = 弱边且滞回连通，
+//        黄 = 弱边但未连通，暗红 = NMS 抑制，黑 = 无响应
+//      link_en_i 也逐帧调度：同一批 view 在开/关两种状态下各跑一遍，DUT 与
+//      参考链吃同一个开关值；绿色只在开的时候出现
 //   4) mode 2/3：第 < IMG_W/2 列 = 中值后灰度图、其余 = 边缘图，逐行逐点查
 //      （2026-10-17 起左半从原图改为灰度图，黄金值用 ref_y_rgb）
 //   5) 帧间靠 mode/view 只在帧首切换，输出与输入逐拍对齐（不做帧号对齐）
@@ -48,7 +50,7 @@ module tb_pipeline_top;
     localparam H_LINE   = IMG_W + H_BLANK;
     localparam ACT_END  = VS_LEAD + IMG_H*H_LINE;
     localparam FRAME    = ACT_END + VS_TAIL + 2;
-    localparam NFRAME   = 9;                   // 帧 0/1 旁路，2..8 见下面的调度
+    localparam NFRAME   = 12;                  // 帧 0/1 旁路，2..11 见下面的调度
 
     localparam HALF_W   = IMG_W / 2;           // 分屏分界列（与 image_mix 一致）
 
@@ -64,8 +66,10 @@ module tb_pipeline_top;
     reg [7:0] mem [0:IMG_W*IMG_H-1];
 
     reg [1023:0] stim_f;
+    integer      expect_green = 0;              // +EXPECT_GREEN=1：本图样必须出绿色
     initial begin
         if (!$value$plusargs("STIM=%s", stim_f)) stim_f = "stim.hex";
+        if (!$value$plusargs("EXPECT_GREEN=%d", expect_green)) expect_green = 0;
         $readmemh(stim_f, mem);
     end
 
@@ -112,25 +116,33 @@ module tb_pipeline_top;
     // mode / view 调度（M5：view_i 改成运行时端口，原来靠 EDGE_BINARY 例化两个
     //   DUT、现在一个 DUT 逐帧切 view 就够）
     //   帧 0/1 = 旁路(0/0)、2 = 边缘(view 0)、3 = 分屏(2)、4 = 画中画(3)、
-    //   5 = mag8 图(view 1)、6 = 假彩图(view 2)、7 = Y 图(view 3)、8 = 再回旁路
+    //   5 = mag8 图(view 1)、6 = 假彩图(view 2)、7 = Y 图(view 3)、
+    //   8 = 边缘(view 0, link 开)、9 = 假彩图(view 2, link 开)、
+    //   10 = mag8 图(view 1, link 开)、11 = 再回旁路(link 开)
     //   只在帧首切换，切换点落在帧消隐里，输出侧逐拍对齐不受影响
     //------------------------------------------------------------------
     reg [1:0] mode = 2'd0;
     reg [1:0] view = 2'd0;
+    reg       link_en = 1'b0;
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            mode <= 2'd0;
-            view <= 2'd0;
+            mode    <= 2'd0;
+            view    <= 2'd0;
+            link_en <= 1'b0;
         end else if (fcyc == 0) begin
             case (frame)
-                2:       begin mode <= 2'd1; view <= 2'd0; end   // 二值边缘图
-                3:       begin mode <= 2'd2; view <= 2'd0; end   // 分屏
-                4:       begin mode <= 2'd3; view <= 2'd0; end   // 画中画（同分屏）
-                5:       begin mode <= 2'd1; view <= 2'd1; end   // mag8 图
-                6:       begin mode <= 2'd1; view <= 2'd2; end   // 五状态假彩图
-                7:       begin mode <= 2'd1; view <= 2'd3; end   // Y 图
-                default: begin mode <= 2'd0; view <= 2'd0; end   // 旁路
+                2:       begin mode <= 2'd1; view <= 2'd0; link_en <= 1'b0; end // 二值边缘图
+                3:       begin mode <= 2'd2; view <= 2'd0; link_en <= 1'b0; end // 分屏
+                4:       begin mode <= 2'd3; view <= 2'd0; link_en <= 1'b0; end // 画中画（同分屏）
+                5:       begin mode <= 2'd1; view <= 2'd1; link_en <= 1'b0; end // mag8 图
+                6:       begin mode <= 2'd1; view <= 2'd2; link_en <= 1'b0; end // 六状态假彩图（关）
+                7:       begin mode <= 2'd1; view <= 2'd3; link_en <= 1'b0; end // Y 图
+                8:       begin mode <= 2'd1; view <= 2'd0; link_en <= 1'b1; end // 二值边缘图（开）
+                9:       begin mode <= 2'd1; view <= 2'd2; link_en <= 1'b1; end // 假彩图（开，绿）
+                10:      begin mode <= 2'd1; view <= 2'd1; link_en <= 1'b1; end // mag8 图（开）
+                11:      begin mode <= 2'd0; view <= 2'd0; link_en <= 1'b1; end // 旁路（开关应无影响）
+                default: begin mode <= 2'd0; view <= 2'd0; link_en <= 1'b0; end // 旁路
             endcase
         end
     end
@@ -149,6 +161,7 @@ module tb_pipeline_top;
         .vsync_i (src_vs), .de_i (src_de), .rgb_i (src_rgb),
         .thr_i (THR_HIGH), .mode_i (mode), .view_i (view),
         .smooth_mode_i (2'd0),                  // 0 = 标准高斯，参考链同值
+        .link_en_i (link_en),                   // 逐帧调度，参考链同值
         .vsync_o (bin_vs), .de_o (bin_de), .rgb_o (bin_rgb)
     );
 
@@ -207,7 +220,7 @@ module tb_pipeline_top;
         .p31 (rq31), .p32 (rq32), .p33 (rq33)
     );
 
-    wire        ref_vs, ref_de, ref_edge;
+    wire        ref_vs, ref_de, ref_edge, ref_link;
     wire [7:0]  ref_mag, ref_mag8;
     wire [1:0]  ref_cls;
 
@@ -219,8 +232,9 @@ module tb_pipeline_top;
         .p31 (rq31), .p32 (rq32), .p33 (rq33),
         .thr_high_i (THR_HIGH), .thr_low_i (THR_LOW),
         .smooth_mode_i (2'd0),                  // 与 u_dut 同值
+        .link_en_i (link_en),                   // 与 u_dut 同值
         .vsync_o (ref_vs), .de_o (ref_de),
-        .mag_o (ref_mag), .edge_o (ref_edge),
+        .mag_o (ref_mag), .edge_o (ref_edge), .link_o (ref_link),
         .mag8_o (ref_mag8), .cls_o (ref_cls)
     );
 
@@ -229,10 +243,13 @@ module tb_pipeline_top;
     // 四种 view 的黄金值（组合值与顶层同名逻辑一一对应，改一处必须改两处）
     wire [8:0]  ref_mag8x2  = {1'b0, ref_mag8} << 1;
     wire [7:0]  ref_mag8v   = ref_mag8x2[8] ? 8'hFF : ref_mag8x2[7:0];
-    // 五状态：强边白 / 弱边分为"滞回连通"蓝与"未连通"黄 / NMS 抑制暗红 / 无响应黑
+    // 六状态：强边白 / 传播保留绿 / 滞回连通蓝 / 未连通黄 / NMS 抑制暗红 / 无响应黑
+    // ★ 优先级与 image_pipeline_top 的 cls_rgb 必须逐字一致：绿只看 ref_link，
+    //   蓝才看 ref_edge（link 像素本身 edge 也是 1）。
     wire [23:0] ref_cls_rgb = (ref_cls == 2'b11) ? 24'hFFFFFF :
-                              (ref_cls == 2'b10) ? (ref_edge ? 24'h0000FF
-                                                             : 24'hFFFF00) :
+                              (ref_cls == 2'b10) ? (ref_link ? 24'h00FF00 :
+                                                    ref_edge ? 24'h0000FF :
+                                                               24'hFFFF00) :
                               (ref_cls == 2'b01) ? 24'h800000 : 24'h000000;
 
     reg [23:0] ref_edge_rgb = 24'h000000;
@@ -338,6 +355,7 @@ module tb_pipeline_top;
 
     integer err_bypass = 0, err_edge = 0, err_split = 0;
     integer err_mag8 = 0, err_cls = 0, err_y = 0;
+    integer ref_green = 0;                     // 参考链在 view2 判为"传播保留"的像素数
     integer out_pix = 0;                       // 本行已输出的像素数（1 基计数）
     integer out_col = 0;                       // 本行当前输出像素的 0 基列号
     integer row_cnt = 0, short_rows = 0, long_rows = 0;
@@ -373,7 +391,11 @@ module tb_pipeline_top;
                     case (view_d)
                         2'd0: if (bin_rgb !== ref_edge_rgb)  err_edge = err_edge + 1;
                         2'd1: if (bin_rgb !== ref_mag8_rgb)  err_mag8 = err_mag8 + 1;
-                        2'd2: if (bin_rgb !== ref_cls_d_rgb) err_cls  = err_cls  + 1;
+                        2'd2: begin
+                            // 用与 bin_rgb 同拍的黄金值计数（ref_cls_d_rgb 已寄存 1 拍）
+                            if (ref_cls_d_rgb == 24'h00FF00) ref_green = ref_green + 1;
+                            if (bin_rgb !== ref_cls_d_rgb) err_cls = err_cls + 1;
+                        end
                         2'd3: if (bin_rgb !== ref_y_rgb)     err_y    = err_y    + 1;
                         default: ;
                     endcase
@@ -411,7 +433,7 @@ module tb_pipeline_top;
         $display("MODE0    旁路逐像素失配 %0d 点", err_bypass);
         $display("VIEW0    二值边缘图失配 %0d 点", err_edge);
         $display("VIEW1    mag8 图失配 %0d 点", err_mag8);
-        $display("VIEW2    五状态假彩图失配 %0d 点", err_cls);
+        $display("VIEW2    六状态假彩图失配 %0d 点（参考链绿色 %0d 点）", err_cls, ref_green);
         $display("VIEW3    Y 图失配 %0d 点", err_y);
         $display("MODE2/3  分屏失配 %0d 点", err_split);
 
@@ -422,7 +444,10 @@ module tb_pipeline_top;
         if (err_bypass != 0)                       begin fails=fails+1; $display("FAIL: mode 0 旁路不逐像素一致"); end
         if (err_edge != 0)                         begin fails=fails+1; $display("FAIL: view 0 二值边缘图不符"); end
         if (err_mag8 != 0)                         begin fails=fails+1; $display("FAIL: view 1 mag8 图不符"); end
-        if (err_cls  != 0)                         begin fails=fails+1; $display("FAIL: view 2 五状态假彩图不符"); end
+        if (err_cls  != 0)                         begin fails=fails+1; $display("FAIL: view 2 六状态假彩图不符"); end
+        // faint_link（+EXPECT_GREEN=1）必须真的出现绿色，否则 link 开关没生效
+        if (expect_green != 0 && ref_green == 0)
+            begin fails=fails+1; $display("FAIL: view2 link 开的帧没有绿色像素"); end
         if (err_y    != 0)                         begin fails=fails+1; $display("FAIL: view 3 Y 图不符"); end
         if (err_split != 0)                        begin fails=fails+1; $display("FAIL: mode 2/3 分屏不符"); end
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-canny_edge 参考模型 + 回归驱动（当前对应 M3：完整算法 = … + 双阈值 + 单遍滞后）
+canny_edge 参考模型 + 回归驱动（M3 + 2026-10-19 方向约束流式反馈）
 
 参考模型刻意用**与 RTL 完全相同的近似**（方案 §8.1 的要求），否则比对必然不一致：
     g   = (p11 + 2p12 + p13 + 2p21 + 4p22 + 2p23 + p31 + 2p32 + p33) >> 4
@@ -15,8 +15,14 @@ canny_edge 参考模型 + 回归驱动（当前对应 M3：完整算法 = … + 
     mag8  = mag >> 3                            （阈值域，0..255 单调无饱和）
     strong = NMS 通过 且 mag8 >= thr_high
     weak   = NMS 通过 且 mag8 >= thr_low
-    edge   = strong || (weak && 8 邻域内存在 strong)
+    edge   = strong || (weak && 8 邻域内存在 strong) || link
              ★ 邻域的 strong 只看未过 NMS 的原始幅值（方案 §3.7 的单遍近似）
+    link   = --link 开 && weak && !strong && !nb_strong
+             && 切向的"已走过"邻居 edge=1 且方向相邻
+             && 行/列门限内（与 RTL 的 link_row_ok / link_col_ok 完全一致）
+             ★ 切向邻居：dir 0→上、1→左、2→右上、3→左上（raster 顺序）
+             ★ link 是**逐行递推**的：当前行依赖上一行已算出的 edge，
+               所以必须按 raster 顺序现算（ref_edge 里就是这样做的）
 
 比对方式：参考模型给出"中心落在 (r,c) 的理想值"，RTL 输出与它之间只差一个固定的
 整体偏移 (EXP_DR, EXP_DC)（流水线固有的行列偏移，写成常量）。比对区留 5~6 圈边，
@@ -52,6 +58,17 @@ THR_LOW = 8     # 弱边阈值（>= 它的才可能被滞后连接）→ ΔY ≥
 #   0 = 标准 1:2:1 高斯；1 = (p22 + 高斯 + 1) >> 1；2 = 完全旁路 p22。
 # 由 main() 的 --smooth 设置；其他函数直接读这个全局值。
 SMOOTH = 0
+
+# 方向约束流式反馈开关（2026-10-19）：由 main() 的 --link 设置，必须与
+# tb_canny_edge 的 +LINK 同值。0 = 旧行为（单遍滞后），1 = 切向传播。
+LINK = 0
+
+# 反馈门限（必须与 canny_edge.v 的 link_row_ok / link_col_ok 完全一致）：
+#   RTL 用 DUT 行号 fb_row_cnt >= 7、列 3..IMG_W-3；
+#   参考模型的坐标是**理想行**，DUT 行 = 理想行 + 3（见 EXP_DR = -3），
+#   所以理想行 >= 4。列方向偏移为 0，门限照抄 3..W-3。
+LINK_GATE_ROW = 4
+LINK_GATE_COL = 3
 
 # M2 流水线的固有空间偏移：RTL 输出 (r,c) 上的像素 = 理想参考 (r+DR, c+DC)。
 # 由窗口链推出：pix_window_3x3 的中心偏 (-1,0) → canny 内的高斯窗口再 (-1,0)
@@ -141,13 +158,35 @@ def ref_nms(mags, dirs, W, H):
     return keep
 
 
+def dir_rank(d):
+    """梯度扇区 → 角度序 0°→45°→90°→135°（与 RTL 的 dir_rank 一致）"""
+    return {0: 0, 2: 1, 1: 2, 3: 3}[d]
+
+
+def dir_compat(d_center, d_seed):
+    """相同或相邻扇区（135° 与 0° 在 mod 180° 下相邻）；差 2 个扇区 = 拐角，不连"""
+    delta = abs(dir_rank(d_center) - dir_rank(d_seed))
+    return delta == 0 or delta == 3
+
+
+# 切向的"raster 已经走过"的邻居（与 RTL 的 fb_seed case 一一对应）
+#   dir 0（边竖直）→ 上；1（边水平）→ 左；2 → 右上；3 → 左上
+TANGENT = {0: (-1, 0), 1: (0, -1), 2: (-1, 1), 3: (-1, -1)}
+
+
 def ref_edge(img, W, H, thr_high, thr_low):
-    """理想 M3 边缘图：NMS + 双阈值单遍滞后（与 RTL 同一套近似）
+    """理想边缘图 + 传播标记：NMS + 双阈值滞后 + 方向约束流式反馈
 
     strong = NMS 过 && mag8 >= thr_high
     weak   = NMS 过 && mag8 >= thr_low
-    edge   = strong || (weak && 8 邻域内含 strong)
+    edge   = strong || (weak && 8 邻域内含 strong) || link
+    link   = LINK && weak && !strong && !nb_strong
+             && 切向邻居已保留 && 方向相邻 && 门限内
     ★ 邻域的 strong 只看**未过 NMS 的原始 mag8**（方案 §3.7 的简化），RTL 同样。
+    ★ link 必须按 raster 顺序递推（依赖上一行/左一列已经算出的 edge），
+      所以和其它"各点独立"的量不同，不能先算完再套。
+    返回 (edge, link) 两个二维表；link 与 RTL 的 link_o 同口径
+    （只标"本来会被丢掉、因传播才留下"的弱边，view=2 的绿色）。
     """
     mags, dirs = ref_grad(img, W, H)
     keep = ref_nms(mags, dirs, W, H)
@@ -163,15 +202,26 @@ def ref_edge(img, W, H, thr_high, thr_low):
         return False
 
     out = [[0] * W for _ in range(H)]
+    link = [[0] * W for _ in range(H)]
     for r in range(H):
         for c in range(W):
             if not keep[r][c]:
                 continue
-            if mag8[r][c] >= thr_high:
+            strong = mag8[r][c] >= thr_high
+            weak = mag8[r][c] >= thr_low
+            nb_s = nb_strong(r, c)
+            if strong or (weak and nb_s):
                 out[r][c] = 1
-            elif mag8[r][c] >= thr_low and nb_strong(r, c):
-                out[r][c] = 1
-    return out
+            elif (LINK and weak and
+                  r >= LINK_GATE_ROW and
+                  LINK_GATE_COL <= c <= W - 3):
+                dr, dc = TANGENT[dirs[r][c]]
+                pr, pc = r + dr, c + dc
+                if (0 <= pr < H and 0 <= pc < W and out[pr][pc] and
+                        dir_compat(dirs[r][c], dirs[pr][pc])):
+                    out[r][c] = 1
+                    link[r][c] = 1
+    return out, link
 
 
 def sobel_mag(img, W, H):
@@ -398,27 +448,31 @@ def write_hex(path, img, W, H):
 
 
 def run_tb(exe, build, stim, out, W, H):
-    cmd = [exe, "+STIM=%s" % stim, "+OUT=%s" % out, "+SMOOTH=%d" % SMOOTH]
+    cmd = [exe, "+STIM=%s" % stim, "+OUT=%s" % out,
+           "+SMOOTH=%d" % SMOOTH, "+LINK=%d" % LINK]
     res = subprocess.run(cmd, cwd=build, capture_output=True, text=True, timeout=600)
     return res.stdout + res.stderr
 
 
 def parse_out(path, W, H):
+    """每行 3 列：mag8 edge link"""
     mag = [[None] * W for _ in range(H)]
     edge = [[None] * W for _ in range(H)]
+    link = [[None] * W for _ in range(H)]
     vals = []
     with open(path) as f:
         for line in f:
             parts = line.split()
-            if len(parts) == 2:
-                vals.append((int(parts[0], 16), int(parts[1])))
+            if len(parts) == 3:
+                vals.append((int(parts[0], 16), int(parts[1]), int(parts[2])))
     if len(vals) != W * H:
         raise RuntimeError("输出像素数 %d != %d" % (len(vals), W * H))
-    for i, (m, e) in enumerate(vals):
+    for i, (m, e, l) in enumerate(vals):
         r, c = divmod(i, W)
         mag[r][c] = m
         edge[r][c] = e
-    return mag, edge
+        link[r][c] = l
+    return mag, edge, link
 
 
 def search_offset(dut, ref, W, H, margin=4, dr_range=8, dc_range=16):
@@ -476,10 +530,13 @@ def main():
     ap.add_argument("--H", type=int, default=32)
     ap.add_argument("--smooth", type=int, choices=(0, 1, 2), default=0,
                     help="Canny 前置平滑：0 标准高斯 / 1 弱平滑 / 2 旁路")
+    ap.add_argument("--link", type=int, choices=(0, 1), default=0,
+                    help="方向约束流式反馈：0 关（旧行为）/ 1 开")
     args = ap.parse_args()
 
-    global SMOOTH
+    global SMOOTH, LINK
     SMOOTH = args.smooth
+    LINK = args.link
 
     W, H = args.W, args.H
     build = args.build
@@ -531,7 +588,8 @@ def main():
             fails += 1
             continue
 
-        dut_mag, dut_edge = parse_out(os.path.join(build, os.path.basename(out)), W, H)
+        dut_mag, dut_edge, dut_link = parse_out(
+            os.path.join(build, os.path.basename(out)), W, H)
         ref = ref_mag(img, W, H)
 
         # mag / edge 都按"流水线固有偏移"这个常量比对
@@ -544,18 +602,26 @@ def main():
 
         # edge 的比对区再收一圈（margin=6）：edge 是 NMS 判决，要看中心像素的
         # 邻居；第 5 行的邻居还是帧首暂态算出来的值，判决可以不一样。
-        edge_ref = ref_edge(img, W, H, THR_HIGH, THR_LOW)
+        edge_ref, link_ref = ref_edge(img, W, H, THR_HIGH, THR_LOW)
         eerr, en, ebad = verify_offset(dut_edge, edge_ref, W, H, dr, dc, margin=6)
-        print("  edge 比对 %d 点，失配 %d 点（参考 = NMS + 双阈值滞后，thr %d/%d）"
-              % (en, eerr, THR_HIGH, THR_LOW))
+        print("  edge 比对 %d 点，失配 %d 点（参考 = NMS + 双阈值滞后%s，thr %d/%d）"
+              % (en, eerr, " + 流式反馈" if LINK else "", THR_HIGH, THR_LOW))
 
-        if err != 0 or eerr != 0:
+        # link_o 同口径比对：LINK=0 时参考全 0，正好验证"关掉没有任何残留"
+        lerr, ln, lbad = verify_offset(dut_link, link_ref, W, H, dr, dc, margin=6)
+        link_n = sum(sum(row) for row in link_ref)
+        print("  link 比对 %d 点，失配 %d 点（参考传播保留 %d 点，link_en=%d）"
+              % (ln, lerr, link_n, LINK))
+
+        if err != 0 or eerr != 0 or lerr != 0:
             fails += 1
             print("  !! FAIL")
             for (r, c, v, rr, cc, rv) in bad[:6]:
                 print("     mag dut(%d,%d)=%d  ref(%d,%d)=%d" % (r, c, v, rr, cc, rv))
             for (r, c, v, rr, cc, rv) in ebad[:6]:
                 print("     edge dut(%d,%d)=%d  ref(%d,%d)=%d" % (r, c, v, rr, cc, rv))
+            for (r, c, v, rr, cc, rv) in lbad[:6]:
+                print("     link dut(%d,%d)=%d  ref(%d,%d)=%d" % (r, c, v, rr, cc, rv))
             # 顺带报一下"最佳偏移"作参考：若最佳偏移不是常量偏移，说明是整体错位；
             # 若相等，说明是逐点算错（或图样自对称）
             best = search_offset(dut_mag, ref, W, H, margin=5)
@@ -617,11 +683,15 @@ def main():
         #     · 孤立的（iso）  ：滞后契约要求**一个都不能留**，全部丢弃。
         #   两拨都是几十个像素量级，所以这个用例真的在测东西（原来只判 `>0`，
         #   faint_iso 里其实只有 2 个像素同时满足"参考连上"和"弱"，等于没测）。
-        # ★ 现在的"单遍滞后"不是真连通传播，只是**把强边集外扩 1 像素**（判据用的是
-        #   未过 NMS 的原始 mag8，无法递归），所以 faint_link 里那条约 40 像素的弱链
-        #   只有紧贴强边的两三个被连上。这是**已知退化**，见 docs/CANNY_PLAN.md §3.7；
-        #   上面的契约断言对"贴着强边的那几个"提要求，正好与退化程度无关。若将来按
-        #   §3.7 重做成真传播，这个用例不用改，直接会多出"整条链都被连上"的覆盖。
+        # ★ LINK=0 时"单遍滞后"不是真连通传播，只是**把强边集外扩 1 像素**（判据
+        #   用的是未过 NMS 的原始 mag8，无法递归），所以 faint_link 里那条约 40
+        #   像素的弱链只有紧贴强边的两三个被连上。这是**已知退化**，见
+        #   docs/CANNY_PLAN.md §3.7；near 契约对"贴着强边的那几个"提要求，正好
+        #   与退化程度无关。
+        # ★ LINK=1 时改成要求整条弱链被切向传播连上（iso 保留 >= 3/4）。
+        #   ★ faint_iso 的"孤立"链顶端在拐角处会凑出一个 mag8 == thr_high 的
+        #     strong 像素（已知的定点加法效应），它就变成种子，所以 link 开时
+        #     不能再要求"孤立弱边全丢"——那条契约只对 LINK=0 成立。
         if name.startswith("faint"):
             want_on = name == "faint_link"
             _, dirs_w = ref_grad(img, W, H)
@@ -644,16 +714,27 @@ def main():
                     else:
                         iso_n += 1
                         iso_kept += 1 if dutv else 0
-            print("  滞后行为（%s）：弱边候选 %d 个 —— 贴强边 %d 个（DUT 连上 %d，契约要求全连）"
-                  "；孤立 %d 个（DUT 保留 %d，契约要求全丢）"
-                  % ("弱边接在强边上" if want_on else "孤立弱边",
+            print("  滞后行为（%s，link=%d）：弱边候选 %d 个 —— 贴强边 %d 个（DUT 保留 %d）"
+                  "；不贴强边 %d 个（DUT 保留 %d）"
+                  % ("弱边接在强边上" if want_on else "孤立弱边", LINK,
                      near_n + iso_n, near_n, near_kept, iso_n, iso_kept))
             if near_kept != near_n:
                 fails += 1
                 print("  !! FAIL: 贴着强边的弱边应全部被滞后连上，漏了 %d 个" % (near_n - near_kept))
-            if iso_kept:
-                fails += 1
-                print("  !! FAIL: 孤立弱边应当整条丢弃，DUT 却留了 %d 个像素" % iso_kept)
+            if LINK:
+                # link 开：faint_link 里不贴强边的那条弱链应当靠切向传播整条活下来。
+                # faint_iso 不设强断言：它的"孤立"链顶端在拐角处凑出一个 strong
+                # 像素（已知定点效应），且 NMS 平局保留让弱边有两条平行的候选链，
+                # 只有紧挨种子的那一条能传播（实测 36/72），另一条本来就不需要连。
+                # 逐点正确性由上面的参考模型比对覆盖（0 失配）。
+                if want_on and iso_n and iso_kept < iso_n:
+                    fails += 1
+                    print("  !! FAIL: link 开时弱链没有沿切向整条传播（只保留 %d/%d）"
+                          % (iso_kept, iso_n))
+            else:
+                if iso_kept:
+                    fails += 1
+                    print("  !! FAIL: 孤立弱边应当整条丢弃，DUT 却留了 %d 个像素" % iso_kept)
             if want_on and near_n == 0:
                 fails += 1
                 print("  !! FAIL: faint_link 里没有弱边贴着强边，这个用例已经测不到滞后")

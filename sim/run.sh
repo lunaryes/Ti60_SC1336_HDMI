@@ -69,9 +69,18 @@ python3 sim/canny_ref.py \
     --W "$IMG_W" --H "$IMG_H" --smooth 2 \
     impulse noise thin
 
+# 1c) link 开：方向约束流式反馈（2026-10-19）。与基线同一批图样，参考模型
+#     按同样的行门控 / 列门控和逐行递推重算 edge/link；link_o 也逐点比对。
+#     基线（link 0）仍在上面跑，所以这一路同时验证了"关掉 = 旧行为逐位一致"。
+python3 sim/canny_ref.py \
+    --exe "$BUILD/obj_dir/V$TOP" \
+    --build "$BUILD" \
+    --W "$IMG_W" --H "$IMG_H" --link 1 "$@"
+
 #---------------------------------------------------------------------
 # 2) 顶层集成回归（M4）：延迟 / vsync 宽度 / mode 0 旁路 / mode 1 边缘图 /
-#    mode 2·3 分屏。图样复用上面生成的同一套 stim_*.hex，纯 Verilog 自检。
+#    mode 2·3 分屏 / view 2 的绿色传播像素。图样复用上面生成的同一套
+#    stim_*.hex，纯 Verilog 自检。faint_link 额外要求 link 开的帧真的出绿色。
 #---------------------------------------------------------------------
 verilator --binary --timing -Wno-fatal -Wno-lint \
     --top-module "$TOP2" \
@@ -90,7 +99,10 @@ fi
 npass=0; nfail=0
 for s in "${STS[@]}"; do
     name=$(basename "$s" .hex); name=${name#stim_}
-    out=$("$BUILD/obj_top/V$TOP2" +STIM="$s" 2>&1)
+    extra=""
+    # faint_link 的弱链在 link 开的帧必须出现绿色（验证 view2 的绿 = 传播保留）
+    [ "$name" = "faint_link" ] && extra="+EXPECT_GREEN=1"
+    out=$("$BUILD/obj_top/V$TOP2" +STIM="$s" $extra 2>&1)
     if echo "$out" | grep -q '^TOP PASS'; then
         npass=$((npass + 1))
         printf '  %-12s OK\n' "$name"

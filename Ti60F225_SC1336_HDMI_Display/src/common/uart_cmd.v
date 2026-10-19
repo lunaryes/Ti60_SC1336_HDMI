@@ -27,7 +27,7 @@
 //   'T' <byte>   thr_high = byte（thr_low 自动 = byte>>1，与原来的 2:1 映射一致）
 //                写入即生效（thr_valid_o 单拍脉冲），优先于板上按键；量程 0..255。
 //                板上 K2 现在按 1 递增 4..48，已能取到所有值
-//   'V' <byte>   view = byte[1:0]  0 边缘图 / 1 mag8 图 / 2 五状态假彩图 / 3 Y 图
+//   'V' <byte>   view = byte[1:0]  0 边缘图 / 1 mag8 图 / 2 六状态假彩图 / 3 Y 图
 //   'M' <byte>   mode = byte[1:0]  0 原图 / 1 边缘图 / 2、3 分屏（左灰度右边缘）
 //   'A' <byte>   AWB **R 通道增益** = byte/64（量程 0..3.98）。上板实测"白墙在室内
 //                白灯下发青" = R 偏低（2026-10-15），这个旋钮用来现场把它调回中性。
@@ -36,9 +36,13 @@
 //   'B' <byte>   AWB **B 通道增益** = byte/64。复位值 96 = ×1.5 = 原来的 384/256
 //   'S' <byte>   smooth = byte[1:0]（>2 按 2 截断）：0 标准高斯 / 1 弱平滑 /
 //                2 完全旁路。写入即生效（smooth_valid_o 单拍脉冲），优先于 K1
-//   'R'          回读：回发 7 字节 {thr, view, mode, gain_r, gain_b, smooth, '\n'}
-//                第 1 字节是真实际生效阈值（来自按键控制器），第 6 字节是实际
-//                生效平滑模式
+//   'L' <byte>   link_en = byte[0]（2026-10-19）：1 = Canny 方向约束流式反馈开，
+//                0 = 退回原来的单遍滞后。用于**不重新综合**地对比开/关
+//                （view=2 下绿色像素就是开的时候新增的传播保留像素）
+//   'R'          回读：回发 8 字节
+//                {thr, view, mode, gain_r, gain_b, smooth, link, '\n'}
+//                第 1 字节是实际生效阈值（来自按键控制器），第 6 字节是实际
+//                生效平滑模式，第 7 字节是 link_en（高电平有效）
 //   'H'          **片内直方图回传请求**（M6，无采集卡时量灰度分布）：只出
 //                hist_req_o 单拍脉冲，本模块不参与回包。真正发流的是
 //                src/common/gray_hist_uart.v，拓扑在 example_top 里做：
@@ -51,17 +55,19 @@
 //                  给直方图模块用来避让在途回包。
 //   其他字节一律忽略 —— 回车、换行、空格可以随便发，不会误触发。
 //
-//   例：把阈值调到 24 并切到五状态图 —— 发 'T' 0x18 'V' 0x02
-//       回读当前状态 —— 发 'R'，应收到 18 02 03 70 60 01 0A
-//                       （70/60 = 112/96 = 复位默认，smooth 复位 = 1）
+//   例：把阈值调到 24 并切到假彩图 —— 发 'T' 0x18 'V' 0x02
+//       回读当前状态 —— 发 'R'，应收到 18 02 03 70 60 01 01 0A
+//                       （70/60 = 112/96 = 复位默认，smooth 复位 = 1，
+//                        link 复位 = 1）
 //       R 增益调到 ×2.5 —— 发 'A' 0xA0（160/64 = 2.5），再用 'R' 确认第 4 个字节是 A0
 //       切到标准高斯 —— 发 'S' 0x00
+//       对比边缘连接开/关 —— 发 'L' 0x01 / 'L' 0x00，再用 'R' 看第 7 个字节
 //
 //---------------------------------------------------------------------
-// 两处刻意的省略（都写在注释里，免得后人以为是漏了）：
-//   ★ 没有 'L'（单独设 thr_low）：thr_low 当前只影响"强边集外扩 1 像素"那点
-//     边界（见 canny_edge.v 的滞后说明），效果微乎其微。等滞回按 §3.7 重做成
-//     真传播之后再加，免得为一个端口动已经冻结的 I-A。
+// 一处刻意的省略（写在注释里，免得后人以为是漏了）：
+//   ★ 没有单独设 thr_low 的命令：thr_low 由 thr_high >> 1 自动给出（2:1），
+//     要单独调它得动已经冻结的 I-A 阈值口；当前单遍滞后/切向传播都只把
+//     thr_low 当"弱边候选"的下限，收益有限。
 //   ★ 参数帧没有超时保护：连发 'T' 之后隔很久再发的字节会被当成参数。调试口，
 //     可接受；要换命令直接发新命令字符即可。
 //
@@ -78,7 +84,8 @@ module uart_cmd #(
                                              // 2026-10-15 对白墙二分，×1.59 偏青、×2.0 偏暖、
                                              // ×1.75 中性。改前写死的是 409/256 ≈ ×1.59）
     parameter [7:0]   GAIN_B_DEF = 8'd96,    // 96/64 = ×1.5（= 原 384/256）
-    parameter [1:0]   SMOOTH_DEF = 2'd1      // 0 标准高斯 / 1 弱平滑 / 2 完全旁路
+    parameter [1:0]   SMOOTH_DEF = 2'd1,     // 0 标准高斯 / 1 弱平滑 / 2 完全旁路
+    parameter         LINK_DEF   = 1'b1      // 1 = 方向约束流式反馈默认开
 )(
     input  wire       clk,
     input  wire       rst_n,
@@ -95,6 +102,7 @@ module uart_cmd #(
     output reg  [1:0] mode_o,
     output reg  [1:0] smooth_o,
     output reg        smooth_valid_o, // 'S' 写入的单拍脉冲，与 smooth_o 同拍有效
+    output reg        link_o,         // 'L' 写入：方向约束流式反馈开关
     // AWB 增益（1/64 定点）。默认 = 复位值 = 原 example_top 里写死的常数，
     // 所以"不插串口"和"插了不用"两种情况下画面与改动前逐像素一致。
     output reg  [7:0] gain_r_o,
@@ -186,12 +194,13 @@ module uart_cmd #(
     // 2) 命令解析：2 字节帧，未知字符直接丢
     //-----------------------------------------------------------------
     localparam [7:0] C_T = 8'h54, C_V = 8'h56, C_M = 8'h4D, C_R = 8'h52,
-                     C_A = 8'h41, C_B = 8'h42, C_H = 8'h48, C_S = 8'h53;
+                     C_A = 8'h41, C_B = 8'h42, C_H = 8'h48, C_S = 8'h53,
+                     C_L = 8'h4C;
 
     reg       p_wait;                 // 正在等参数字节
     reg [7:0] p_cmd;
     reg       tx_req;
-    reg [7:0] tx_d [0:6];             // 7 字节 {thr,view,mode,gain_r,gain_b,smooth,'\n'}
+    reg [7:0] tx_d [0:7];             // 8 字节 {thr,view,mode,gain_r,gain_b,smooth,link,'\n'}
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -201,6 +210,7 @@ module uart_cmd #(
             mode_o   <= MODE_DEF;
             smooth_o <= SMOOTH_DEF;
             smooth_valid_o <= 1'b0;
+            link_o   <= LINK_DEF;
             gain_r_o <= GAIN_R_DEF;
             gain_b_o <= GAIN_B_DEF;
             p_wait     <= 1'b0;
@@ -215,7 +225,7 @@ module uart_cmd #(
             if (rx_valid) begin
                 if (!p_wait) begin
                     case (rx_byte)
-                        C_T, C_V, C_M, C_A, C_B, C_S: begin
+                        C_T, C_V, C_M, C_A, C_B, C_S, C_L: begin
                             p_cmd  <= rx_byte;
                             p_wait <= 1'b1;
                         end
@@ -230,7 +240,8 @@ module uart_cmd #(
                             tx_d[3] <= gain_r_o;         // 回读里带上增益：
                             tx_d[4] <= gain_b_o;         // 调完不用再猜"到底生效没有"
                             tx_d[5] <= {6'b0, smooth_read_i};
-                            tx_d[6] <= 8'h0A;            // '\n'
+                            tx_d[6] <= {7'b0, link_o};   // 方向约束反馈开关
+                            tx_d[7] <= 8'h0A;            // '\n'
                             tx_req  <= 1'b1;
                         end
                         default: ;                        // 忽略（回车/换行/空格）
@@ -250,6 +261,7 @@ module uart_cmd #(
                         end
                         C_A:     gain_r_o <= rx_byte;
                         C_B:     gain_b_o <= rx_byte;
+                        C_L:     link_o   <= rx_byte[0];
                         default: ;
                     endcase
                     p_wait <= 1'b0;
@@ -259,7 +271,7 @@ module uart_cmd #(
     end
 
     //-----------------------------------------------------------------
-    // 3) 发送：'R' 的 7 字节回包。忙时来的新请求会被丢掉（调试口，可接受）
+    // 3) 发送：'R' 的 8 字节回包。忙时来的新请求会被丢掉（调试口，可接受）
     //-----------------------------------------------------------------
     localparam [1:0] T_IDLE = 2'd0, T_START = 2'd1, T_DATA = 2'd2, T_STOP = 2'd3;
 
@@ -267,7 +279,7 @@ module uart_cmd #(
     reg [CW-1:0] tx_cnt;
     reg [2:0]    tx_bidx;
     reg [7:0]    tx_sh;
-    reg [2:0]    tx_idx;                               // 0..6，回包 7 字节
+    reg [2:0]    tx_idx;                               // 0..7，回包 8 字节
     reg          tx_line;
 
     always @(posedge clk or negedge rst_n) begin
@@ -314,8 +326,8 @@ module uart_cmd #(
                 T_STOP: begin
                     tx_line <= 1'b1;
                     if (tx_cnt == 0) begin
-                        if (tx_idx == 3'd6) begin
-                            tx_state <= T_IDLE;            // 7 字节发完
+                        if (tx_idx == 3'd7) begin
+                            tx_state <= T_IDLE;            // 8 字节发完
                         end else begin
                             tx_idx   <= tx_idx + 1'b1;
                             tx_sh    <= tx_d[tx_idx + 1'b1];
