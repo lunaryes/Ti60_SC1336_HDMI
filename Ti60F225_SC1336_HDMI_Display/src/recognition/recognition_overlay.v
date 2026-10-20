@@ -29,7 +29,7 @@ module recognition_overlay #(
         .ascii_o  (unused_ascii)
     );
 
-    wire roi_border = recognized_i &&
+    wire roi_border =
         ((((x_i == ROI_X0) || (x_i == ROI_X0 + ROI_W - 1)) &&
           (y_i >= ROI_Y0) && (y_i < ROI_Y0 + ROI_H)) ||
          (((y_i == ROI_Y0) || (y_i == ROI_Y0 + ROI_H - 1)) &&
@@ -55,7 +55,7 @@ module recognition_overlay #(
         rgb_o = de_i ? rgb_i : 24'h000000;
         if (de_i) begin
             if (roi_border)
-                rgb_o = 24'h00FF00;
+                rgb_o = recognized_i ? 24'h00FF00 : 24'hFF8000;
             if (in_icon)
                 rgb_o = icon_pixel ? 24'hFFFFFF : 24'h202020;
             if (confidence_bar)

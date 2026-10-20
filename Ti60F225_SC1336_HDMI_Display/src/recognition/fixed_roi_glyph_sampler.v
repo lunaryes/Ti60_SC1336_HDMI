@@ -77,22 +77,20 @@ module fixed_roi_glyph_sampler #(
             x_o <= x_cnt;
             y_o <= y_cnt;
 
-            if (!vsync_i) begin
-                x_cnt <= 11'd0;
-                y_cnt <= 10'd0;
-            end else begin
-                if (de_i) begin
-                    if (x_cnt == IMG_W-1)
-                        x_cnt <= 11'd0;
-                    else
-                        x_cnt <= x_cnt + 11'd1;
-                end else begin
+            // The project uses vsync_i as a frame-start pulse, not as a
+            // frame-active level. Keep counting after that pulse and reset
+            // the vertical coordinate only on the next frame_start.
+            if (de_i) begin
+                if (x_cnt == IMG_W-1)
                     x_cnt <= 11'd0;
-                end
-
-                if (line_end)
-                    y_cnt <= y_cnt + 10'd1;
+                else
+                    x_cnt <= x_cnt + 11'd1;
+            end else begin
+                x_cnt <= 11'd0;
             end
+
+            if (line_end)
+                y_cnt <= y_cnt + 10'd1;
 
             if (inside_roi && foreground_i &&
                 (cell_hits[cell_index] != {HIT_W{1'b1}}))

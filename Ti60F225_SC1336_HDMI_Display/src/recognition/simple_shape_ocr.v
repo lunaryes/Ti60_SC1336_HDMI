@@ -11,7 +11,9 @@ module simple_shape_ocr #(
     parameter integer ROI_H         = 128,
     parameter integer CELL_HITS_MIN = 4,
     parameter [6:0]   MAX_DISTANCE  = 7'd12,
-    parameter [6:0]   MIN_MARGIN    = 7'd2
+    parameter [6:0]   MIN_MARGIN    = 7'd2,
+    // 35 = digits 0-9 plus uppercase A-Z only.
+    parameter [5:0]   LAST_TEMPLATE = 6'd35
 )(
     input  wire        clk,
     input  wire        rst_n,
@@ -53,7 +55,8 @@ module simple_shape_ocr #(
 
     symbol_template_matcher #(
         .MAX_DISTANCE (MAX_DISTANCE),
-        .MIN_MARGIN   (MIN_MARGIN)
+        .MIN_MARGIN   (MIN_MARGIN),
+        .LAST_TEMPLATE(LAST_TEMPLATE)
     ) u_matcher (
         .clk               (clk),
         .rst_n             (rst_n),

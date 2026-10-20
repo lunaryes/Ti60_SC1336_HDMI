@@ -4,7 +4,10 @@
 // One recognition takes 51 clocks and uses one shared popcount datapath.
 module symbol_template_matcher #(
     parameter [6:0] MAX_DISTANCE = 7'd12,
-    parameter [6:0] MIN_MARGIN   = 7'd2
+    parameter [6:0] MIN_MARGIN   = 7'd2,
+    // ROM address of the final class to scan. 49 keeps all 50 classes;
+    // 35 limits matching to digits 0-9 and uppercase letters A-Z.
+    parameter [5:0] LAST_TEMPLATE = 6'd49
 )(
     input  wire        clk,
     input  wire        rst_n,
@@ -19,8 +22,6 @@ module symbol_template_matcher #(
     output reg  [6:0]  best_distance_o,
     output reg  [6:0]  second_distance_o
 );
-    localparam [5:0] LAST_TEMPLATE = 6'd49;
-
     reg [63:0] glyph_latched;
     reg [5:0]  scan_addr;
     reg [5:0]  best_addr;

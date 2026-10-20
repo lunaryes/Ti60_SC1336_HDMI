@@ -1278,6 +1278,82 @@ image_pipeline_top #(.IMG_W(1280),.IMG_H(720),.LATENCY(IMG_LAT)) u_image_pipelin
 );
 
 //---------------------------------------------------------------------
+// Fixed-ROI digit / uppercase-letter recognition (36 classes).
+// The recognizer sees the median-filtered grayscale stream rather than
+// the selected Canny display view. This keeps recognition independent of
+// VIEW/MODE and interprets dark ink on a light card as foreground.
+//---------------------------------------------------------------------
+localparam [7:0] OCR_BIN_THR = 8'd96;
+wire [10:0] ocr_unused_x;
+wire [9:0]  ocr_unused_y;
+wire        ocr_result_valid;
+wire        ocr_recognized;
+wire [5:0]  ocr_class_id;
+wire [7:0]  ocr_ascii;
+wire [6:0]  ocr_best_distance;
+wire [6:0]  ocr_second_distance;
+
+simple_shape_ocr #(
+    .IMG_W         (1280),
+    .ROI_X0        (576),
+    .ROI_Y0        (296),
+    .ROI_W         (128),
+    .ROI_H         (128),
+    .CELL_HITS_MIN (4),
+    .MAX_DISTANCE  (7'd12),
+    .MIN_MARGIN    (7'd2),
+    .LAST_TEMPLATE (6'd35)
+) u_simple_shape_ocr (
+    .clk               (clk_pixel),
+    .rst_n             (rstn_pixel),
+    .vsync_i           (hist_vs),
+    .de_i              (hist_de),
+    .foreground_i      (hist_y < OCR_BIN_THR),
+    .x_o               (ocr_unused_x),
+    .y_o               (ocr_unused_y),
+    .result_valid_o    (ocr_result_valid),
+    .recognized_o      (ocr_recognized),
+    .class_id_o        (ocr_class_id),
+    .ascii_o           (ocr_ascii),
+    .best_distance_o   (ocr_best_distance),
+    .second_distance_o (ocr_second_distance)
+);
+
+// Generate coordinates from the final pipeline stream, so the overlay is
+// pixel-aligned even though recognition samples an earlier grayscale tap.
+wire [10:0] overlay_x;
+wire [9:0]  overlay_y;
+wire [23:0] pipe_rgb_ocr;
+
+video_xy_counter #(.IMG_W(1280)) u_overlay_xy (
+    .clk     (clk_pixel),
+    .rst_n   (rstn_pixel),
+    .vsync_i (pipe_vs),
+    .de_i    (pipe_de),
+    .x_o     (overlay_x),
+    .y_o     (overlay_y)
+);
+
+recognition_overlay #(
+    .ROI_X0 (576),
+    .ROI_Y0 (296),
+    .ROI_W  (128),
+    .ROI_H  (128),
+    .TEXT_X (24),
+    .TEXT_Y (24),
+    .SCALE  (4)
+) u_recognition_overlay (
+    .x_i               (overlay_x),
+    .y_i               (overlay_y),
+    .de_i              (pipe_de),
+    .rgb_i             (pipe_rgb),
+    .recognized_i      (ocr_recognized),
+    .class_id_i        (ocr_class_id),
+    .best_distance_i   (ocr_best_distance),
+    .rgb_o             (pipe_rgb_ocr)
+);
+
+//---------------------------------------------------------------------
 // 片内灰度直方图：测一帧 Y 分布，778 字节从 UART 回传（'H' 触发）
 //   跑在 clk_pixel，与流水线同域；实测 1 块 EFX_RAM10、225 FF、0 DSP。
 //   不插串口 / 不发 'H' 时它只是空闲，不影响画面和原有命令。
@@ -1326,7 +1402,7 @@ FrameBoundCrop #(.SKIP_ROWS(2),.SKIP_COLS(2),.TOTAL_ROWS(720),.TOTAL_COLS(1280))
     .vs_i                              (pipe_vs                   ),
     .hs_i                              (pipe_hs                   ),
     .de_i                              (pipe_de                   ),
-    .data_i                            (pipe_rgb                  ),
+    .data_i                            (pipe_rgb_ocr              ),
 
     .vs_o                              (boundcrop_vs              ),
     .hs_o                              (boundcrop_hs              ),

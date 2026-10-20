@@ -45,6 +45,12 @@
         <efx:design_file name="src/common/uart_tx.v" version="default" library="default" />
         <efx:design_file name="src/common/gray_hist_uart.v" version="default" library="default" />
         <efx:design_file name="src/control/canny_threshold_key_ctrl.v" version="default" library="default" />
+        <efx:design_file name="src/recognition/fixed_roi_glyph_sampler.v" version="default" library="default" />
+        <efx:design_file name="src/recognition/symbol_template_rom.v" version="default" library="default" />
+        <efx:design_file name="src/recognition/symbol_template_matcher.v" version="default" library="default" />
+        <efx:design_file name="src/recognition/simple_shape_ocr.v" version="default" library="default" />
+        <efx:design_file name="src/recognition/video_xy_counter.v" version="default" library="default" />
+        <efx:design_file name="src/recognition/recognition_overlay.v" version="default" library="default" />
         <efx:top_vhdl_arch name="" />
         <efx:msg_config name="" />
         <efx:partition_definitions name="" />
