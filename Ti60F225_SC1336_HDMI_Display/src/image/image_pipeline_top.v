@@ -78,7 +78,17 @@ module image_pipeline_top #(
     // 中值滤波参数：默认只替换"局部极值且与中值差 ≥24"的脉冲点，干净台阶边
     // 会被原样保留；要更强的去噪可把 IMPULSE_ONLY 设 0（全 3x3 中值）。
     parameter integer MEDIAN_IMPULSE_ONLY  = 1,
-    parameter [7:0]   MEDIAN_IMPULSE_DELTA = 8'd24
+    parameter [7:0]   MEDIAN_IMPULSE_DELTA = 8'd24,
+    // ★ 2026-10-20 临时诊断：1 = view2 把"传播条件成立但不含门控"的弱边
+    //   画成洋红，用来区分"条件没成立"和"被 enable/行列门控挡住"。
+    //   默认 0，仿真参考模型（只认识绿/蓝/黄）不受影响；诊断完删掉。
+    parameter integer DBG_LINK_COLOR = 0,
+    // ★ 2026-10-20 黄色断边增强，见 canny_edge.v 同名参数注释。默认 0 =
+    //   保持原有 ≤45° 约束和连续链语义（仿真参考模型不变）。
+    parameter integer LINK_TURN90 = 0,
+    parameter integer LINK_GAP1   = 0,
+    // ★ 弱结构保留（不依赖强种子的第三条保留路径），见 canny_edge.v。
+    parameter integer WEAK_STRUCT = 0
 )(
     input  wire        clk_i,        // clk_pixel
     input  wire        rst_ni,
@@ -101,7 +111,13 @@ module image_pipeline_top #(
     // 不接直方图时可以悬空；不影响延迟和原有输出。
     output wire [7:0]  dbg_y_o,
     output wire        dbg_de_o,
-    output wire        dbg_vs_o
+    output wire        dbg_vs_o,
+
+    // ★ 2026-10-20 临时诊断口（定位板上没有绿色；见 canny_edge.v 同名注释）
+    output wire        dbg_cond_o,
+    output wire        dbg_link_en_o,
+    output wire        dbg_cond_seen_o,
+    output wire        dbg_link_seen_o
 );
 
     localparam CANNY_LAT = 12;
@@ -237,14 +253,21 @@ module image_pipeline_top #(
     wire [1:0]  can_cls;              // 判决分类：00/01/10/11，调试用
     wire        can_edge;
     wire        can_link;             // 仅因切向传播才保留的弱边，调试用
+    wire        can_cond;             // ★诊断：传播条件（不含 enable/行列门控）
+    wire        can_link_en;          // ★诊断：link_en_active 实际值
+    wire        can_cond_seen;        // ★诊断：本帧出现过 cond
+    wire        can_link_seen;        // ★诊断：本帧出现过 link
 
     // 单一阈值口 → 双阈值（2:1），见文件头的【thr_i】
     wire [7:0]  thr_high = thr_i;
     wire [7:0]  thr_low  = {1'b0, thr_i[7:1]};
 
     canny_edge #(
-        .IMG_W   (IMG_W),
-        .LATENCY (CANNY_LAT)
+        .IMG_W       (IMG_W),
+        .LATENCY     (CANNY_LAT),
+        .LINK_TURN90 (LINK_TURN90),
+        .LINK_GAP1   (LINK_GAP1),
+        .WEAK_STRUCT (WEAK_STRUCT)
     ) u_canny_edge (
         .clk     (clk_i),
         .rst_n   (rst_ni),
@@ -268,8 +291,17 @@ module image_pipeline_top #(
         .edge_o  (can_edge),
         .link_o  (can_link),
         .mag8_o  (can_mag8),
-        .cls_o   (can_cls)
+        .cls_o   (can_cls),
+        .cond_o       (can_cond),
+        .link_en_dbg_o(can_link_en),
+        .cond_seen_o  (can_cond_seen),
+        .link_seen_o  (can_link_seen)
     );
+
+    assign dbg_cond_o      = can_cond;
+    assign dbg_link_en_o   = can_link_en;
+    assign dbg_cond_seen_o = can_cond_seen;
+    assign dbg_link_seen_o = can_link_seen;
 
     //-----------------------------------------------------------------
     // 5) 边缘支路显示内容，由 view_i 选（与 can_de / can_mag / can_edge 同拍）
@@ -301,6 +333,8 @@ module image_pipeline_top #(
     wire [23:0] cls_rgb = (can_cls == 2'b11) ? 24'hFFFFFF :   // 强边     白
                           (can_cls == 2'b10) ?
                               (can_link ? 24'h00FF00 :        // 传播保留 绿
+                               (DBG_LINK_COLOR && can_cond) ? 24'hFF00FF :
+                                                              // ★诊断：条件成立但被门控
                                can_edge ? 24'h0000FF :        // 滞回连通 蓝
                                           24'hFFFF00) :       // 弱边未连 黄
                           (can_cls == 2'b01) ? 24'h800000 :   // NMS 抑制 深红

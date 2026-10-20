@@ -13,6 +13,14 @@
 //   ★ 该功能**不增加流水线拍数**（LATENCY 仍是 12），可用 link_en_i 运行时关掉；
 //     关掉后 edge_o 与 M3 逐位一致。link_o 标出"仅因传播才保留"的弱边像素，
 //     view=2 用它把这些像素画成绿色（见 image_pipeline_top）。
+//   2026-10-20 加三个**编译期**增强（默认关，仿真参考模型不变）：
+//     LINK_TURN90=1 允许 90° 拐角转向（原判据只允许 ≤45°，网格线从强边拐进
+//       垂直支路时会被挡住）；LINK_GAP1=1 允许跨过 1 个像素的断口（行缓存条目
+//       多存一位 prev_edge），用来接上 thr 偏高时被阈值切断的弱链。
+//       两者都只影响 link 的种子判据，不增加拍数、不改变 M3/link=0 的行为。
+//     WEAK_STRUCT=1 是完全独立的第三条保留路径：弱像素的 8 邻域里有 ≥2 个
+//       弱邻居就保留。不依赖强种子，专门救"整条都弱、又不挨强边"的细笔画
+//       （实测典型：测试图里的数字轮廓）。
 //   edge_o 的宽度：斜 45°/135° 实测最大 1 个像素，横/竖因方案 §11 决议 2 的
 //   "平局保留"最多相邻 2 个像素，均与参考模型逐点一致。
 //   端口与 sobel_edge 的差别只有阈值口：sobel 是单个 thr_i，这里是 thr_high_i /
@@ -134,7 +142,21 @@
 //=====================================================================
 module canny_edge #(
     parameter integer IMG_W   = 1280,
-    parameter         LATENCY = 12       // 对外延迟（拍），与上面的推导一致
+    parameter         LATENCY = 12,      // 对外延迟（拍），与上面的推导一致
+    // ★ 2026-10-20 黄色断边增强（默认关：仿真参考模型只认识现有语义）
+    //   LINK_TURN90 = 1：允许传播在 90° 拐角处转向。默认只允许 ≤45°，
+    //                    网格线从强边拐进垂直支路时会被挡住，整条支路留黄。
+    //   LINK_GAP1   = 1：允许跨过 1 个像素的断口继续传播（断线桥接）。
+    //                    利用行缓存里新增的 prev_edge 位，不加额外行缓存。
+    parameter integer LINK_TURN90 = 0,
+    parameter integer LINK_GAP1   = 0,
+    //   WEAK_STRUCT = 1：弱结构保留（不需要强种子）。弱像素的 8 邻域里
+    //     至少有 2 个邻居的原始 mag8 ≥ thr_low 时，直接保留为边。
+    //     细笔画（数字、网格线）经过 3×3 高斯后峰值被压低，常落在
+    //     thr_low..thr_high 之间且不挨强边 —— link 永远够不到；而细线上
+    //     每个像素天然有 ≥2 个同向弱邻居，孤立噪点没有，用连通性区分两者。
+    //     默认 0：仿真参考模型不认识这条路径。
+    parameter integer WEAK_STRUCT = 0
 )(
     input  wire        clk,
     input  wire        rst_n,
@@ -170,7 +192,22 @@ module canny_edge #(
     //     cls_o = 10/11 而 edge_o = 0 ⇔ 逻辑/接线 bug；cls_o = 00 ⇔ 阈值再低也没用。
     //-----------------------------------------------------------------
     output reg  [7:0]  mag8_o,
-    output reg  [1:0]  cls_o
+    output reg  [1:0]  cls_o,
+
+    //-----------------------------------------------------------------
+    // ★ 2026-10-20 临时诊断口（板上"永远没有绿色"定位用，诊断完删除）：
+    //   cond_o       = 传播条件本身（weak && !strong && !nb_strong &&
+    //                  切向种子是 edge && 方向兼容），**不含** link_gate。
+    //                  view=2 里用洋红显示：有洋红 = 种子/方向都对，只被
+    //                  enable/行列门控挡住；没有洋红 = 条件根本没成立。
+    //   link_en_dbg_o = link_en_active（帧首锁存的开关实际值），接 LED。
+    //   cond_seen_o   = 本帧内 cond_c 是否出现过（帧首清零），接 LED。
+    //   link_seen_o   = 本帧内 link_c 是否出现过（帧首清零），接 LED。
+    //-----------------------------------------------------------------
+    output reg         cond_o,
+    output wire        link_en_dbg_o,
+    output reg         cond_seen_o,
+    output reg         link_seen_o
 );
 
     //-----------------------------------------------------------------
@@ -483,9 +520,23 @@ module canny_edge #(
                      (mag8_of(m23) >= thr_high_i) || (mag8_of(m31) >= thr_high_i) ||
                      (mag8_of(m32) >= thr_high_i) || (mag8_of(m33) >= thr_high_i);
 
+    // 8 邻域"弱邻居"计数（WEAK_STRUCT）：同样只看原始 mag8，不看邻居的 NMS。
+    wire [7:0] weak_nb_vec = {(mag8_of(m11) >= thr_low_i), (mag8_of(m12) >= thr_low_i),
+                              (mag8_of(m13) >= thr_low_i), (mag8_of(m21) >= thr_low_i),
+                              (mag8_of(m23) >= thr_low_i), (mag8_of(m31) >= thr_low_i),
+                              (mag8_of(m32) >= thr_low_i), (mag8_of(m33) >= thr_low_i)};
+    wire [3:0] weak_nb_cnt = {3'd0, weak_nb_vec[0]} + {3'd0, weak_nb_vec[1]} +
+                             {3'd0, weak_nb_vec[2]} + {3'd0, weak_nb_vec[3]} +
+                             {3'd0, weak_nb_vec[4]} + {3'd0, weak_nb_vec[5]} +
+                             {3'd0, weak_nb_vec[6]} + {3'd0, weak_nb_vec[7]};
+    // 细线上每个像素至少有 2 个同向弱邻居；孤立点/孤立两点不满足。
+    wire weak_struct_c = weak_c && (weak_nb_cnt >= 4'd2);
+
     //-------------------------------------------------------------
     // S11b：方向约束流式反馈（link_en_i）
-    //   反馈存每像素 3 bit = {dir[1:0], edge}。两个 IMG_W×3 bank 按行轮转：
+    //   反馈存每像素 4 bit = {prev_edge, dir[1:0], edge}（prev_edge 供 LINK_GAP1
+    //   桥接 1 像素断口；LINK_GAP1=0 时该位不参与判决，行为与 3 bit 版一致）。
+    //   两个 IMG_W×4 bank 按行轮转：
     //   当前行写 bank(sel)，上一行从 bank(sel^1) 读。语义与 canny_win3x3 的
     //   两 bank 完全一致，只是读地址要提前 2 列（见下面的预测式读地址）。
     //
@@ -494,7 +545,7 @@ module canny_edge #(
     //     中心列 C 在当拍，RAM 同步读要下一拍才出数，所以必须在 C-1 那拍就
     //     把地址 C+1 发出去；即每拍发 fb_col+2。读出的 q 经两级移位得到
     //     q=prev[C+1]（右上）、q_d1=prev[C]（上）、q_d2=prev[C-1]（左上）。
-    //   左邻不需要 RAM：C-1 的中心结果就是上一拍的 edge_c/dir_c，一个 3bit
+    //   左邻不需要 RAM：C-1 的中心结果就是上一拍的 fb_entry_c，一个 4bit
     //     寄存器即可（fb_left）。
     //
     //   边界门限（必须与 sim/canny_ref.py 的 LINK_GATE_* 完全一致）：
@@ -549,18 +600,23 @@ module canny_edge #(
                                   (fb_col >= FB_COL_LAST2) ? FB_LAST :
                                   (fb_col + 2'd2);
 
-    reg [2:0] fb_bank0 [0:IMG_W-1];
-    reg [2:0] fb_bank1 [0:IMG_W-1];
-    reg [2:0] fb_q0, fb_q1;
+    // 行缓存条目 4 bit = {prev_edge, dir[1:0], edge}：
+    //   [0]   本像素是边
+    //   [2:1] 本像素的 NMS 方向
+    //   [3]   本像素的切向过去邻居是边且方向相容（LINK_GAP1 桥接用）
+    // [3] 只由真边（[0]）产生，不会把"桥接"再桥接下去，所以最多跨 1 个断口。
+    reg [3:0] fb_bank0 [0:IMG_W-1];
+    reg [3:0] fb_bank1 [0:IMG_W-1];
+    reg [3:0] fb_q0, fb_q1;
 
     // bank_sel=0: 写 bank0(当前行)，读 bank1(上一行)；=1 时互换。
-    wire [2:0] fb_prev = fb_bank_sel ? fb_q0 : fb_q1;
+    wire [3:0] fb_prev = fb_bank_sel ? fb_q0 : fb_q1;
 
-    reg [2:0] fb_prev_d1, fb_prev_d2;
-    reg [2:0] fb_left;
+    reg [3:0] fb_prev_d1, fb_prev_d2;
+    reg [3:0] fb_left;
 
     // 按中心像素自己的方向选"切向的过去邻居"
-    reg [2:0] fb_seed;
+    reg [3:0] fb_seed;
     always @(*) begin
         case (dir_c)
             2'b00:   fb_seed = fb_prev_d1;   // 上
@@ -589,43 +645,58 @@ module canny_edge #(
     wire [1:0] dir_delta  = (dir_rank_c >= dir_rank_n) ?
                             (dir_rank_c - dir_rank_n) :
                             (dir_rank_n - dir_rank_c);
-    wire dir_compat = (dir_delta == 2'd0) || (dir_delta == 2'd3);
+    // 默认只允许 ≤45°（差 0 或 3 个扇区）；LINK_TURN90=1 时也允许 90°（差 2）。
+    wire dir_compat = (dir_delta == 2'd0) || (dir_delta == 2'd3) ||
+                      ((LINK_TURN90 != 0) && (dir_delta == 2'd2));
+
+    // 直接种子：切向过去邻居本身是边且方向相容。
+    wire seed_direct_c = fb_seed[0] && dir_compat;
+    // 断口桥接：过去邻居不是边，但它再往前一个切向像素是边（且与它相容）。
+    // fb_seed[3] 来自行缓存的 prev_edge 位，只由真边产生 → 最多跨 1 个断口。
+    wire seed_gap_c = (LINK_GAP1 != 0) && !fb_seed[0] && fb_seed[3] && dir_compat;
+    wire seed_ok_c  = seed_direct_c || seed_gap_c;
 
     wire link_col_ok = (fb_col >= 2'd3) && (fb_col <= FB_COL_MAX);
     wire link_row_ok = (fb_row_cnt >= 4'd7);
     wire link_gate   = link_en_active && link_col_ok && link_row_ok;
 
+    // 诊断：与 link_c 完全相同的条件，但去掉 link_gate（enable + 行/列门控）。
+    wire cond_c = weak_c && !strong_c && !nb_strong && seed_ok_c;
+
+    // 写回行缓存的条目（[3] 必须是"直接种子"，不能把桥接位再存回去）。
+    wire [3:0] fb_entry_c = {seed_direct_c, dir_c, edge_c};
+
     // link 只标"本来会被丢掉、因为传播才留下"的弱边：
     // 已由 strong / 单遍滞后保留的像素不置 link（颜色仍按原语义）。
-    wire link_c = link_gate && weak_c && !strong_c && !nb_strong &&
-                  fb_seed[0] && dir_compat;
+    wire link_c = link_gate && cond_c;
 
-    wire edge_c = strong_c || (weak_c && nb_strong) || link_c;
+    wire edge_c = strong_c || (weak_c && nb_strong) ||
+                  ((WEAK_STRUCT != 0) && weak_struct_c) || link_c;
 
     // 行历史右移链 + 同列左邻寄存器。q/q_d1/q_d2 的列对齐见上面的读地址说明。
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            fb_prev_d1 <= 3'd0;
-            fb_prev_d2 <= 3'd0;
-            fb_left    <= 3'd0;
+            fb_prev_d1 <= 4'd0;
+            fb_prev_d2 <= 4'd0;
+            fb_left    <= 4'd0;
         end else begin
             fb_prev_d2 <= fb_prev_d1;
             fb_prev_d1 <= fb_prev;
             if (mwin_de)
-                fb_left <= {dir_c, edge_c};
+                fb_left <= fb_entry_c;
         end
     end
 
     // 反馈 RAM：单时钟、1 读 1 写，不做复位。当前行写、上一行读。
     always @(posedge clk) begin
         if (mwin_de && fb_bank_sel == 1'b0)
-            fb_bank0[fb_col] <= {dir_c, edge_c};
+            fb_bank0[fb_col] <= fb_entry_c;
         fb_q0 <= fb_bank0[fb_rd_addr];
     end
 
     always @(posedge clk) begin
         if (mwin_de && fb_bank_sel == 1'b1)
-            fb_bank1[fb_col] <= {dir_c, edge_c};
+            fb_bank1[fb_col] <= fb_entry_c;
         fb_q1 <= fb_bank1[fb_rd_addr];
     end
 
@@ -636,11 +707,29 @@ module canny_edge #(
                        weak_c                ? 2'b10 :
                        (mag8_c >= thr_low_i) ? 2'b01 : 2'b00;
 
+    // ★ 临时诊断：帧首锁存的 enable 实际值直接送 LED；再统计本帧内是否
+    //   出现过 cond / link（LED 用；即使 vsync 一直不上升，粘滞位也不会丢）。
+    assign link_en_dbg_o = link_en_active;
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            cond_seen_o <= 1'b0;
+            link_seen_o <= 1'b0;
+        end else if (vsync_i && !vsync_mode_d) begin
+            cond_seen_o <= 1'b0;
+            link_seen_o <= 1'b0;
+        end else begin
+            if (mwin_de && cond_c) cond_seen_o <= 1'b1;
+            if (mwin_de && link_c) link_seen_o <= 1'b1;
+        end
+    end
+
     reg [11:0] mag_s11;
     reg [7:0]  mag8_s11;
     reg [1:0]  cls_s11;
     reg        edge_s11;
     reg        link_s11;
+    reg        cond_s11;
     reg        vsync_s11, de_s11;
 
     always @(posedge clk or negedge rst_n) begin
@@ -650,6 +739,7 @@ module canny_edge #(
             cls_s11   <= 2'b00;
             edge_s11  <= 1'b0;
             link_s11  <= 1'b0;
+            cond_s11  <= 1'b0;
             vsync_s11 <= 1'b0;
             de_s11    <= 1'b0;
         end else begin
@@ -658,6 +748,7 @@ module canny_edge #(
             cls_s11   <= cls_c;
             edge_s11  <= edge_c;
             link_s11  <= link_c;
+            cond_s11  <= cond_c;
             vsync_s11 <= mwin_vs;
             de_s11    <= mwin_de;
         end
@@ -684,12 +775,14 @@ module canny_edge #(
             link_o  <= 1'b0;
             mag8_o  <= 8'd0;
             cls_o   <= 2'b00;
+            cond_o  <= 1'b0;
         end else begin
             vsync_o <= vsync_s11;
             de_o    <= de_s11;
             mag_o   <= de_s11 ? mag_sat : 8'd0;
             edge_o  <= de_s11 & edge_s11;
             link_o  <= de_s11 & link_s11;
+            cond_o  <= de_s11 & cond_s11;
             // 调试口与 mag_o/edge_o 同一口径：de = 0 的区段一律出 0
             mag8_o  <= de_s11 ? mag8_s11 : 8'd0;
             cls_o   <= de_s11 ? cls_s11  : 2'b00;

@@ -799,7 +799,28 @@ module example_top
 		r_cmos_rx_vsync0_in <= {r_cmos_rx_vsync0_in, cmos_vsync}; 
 		r_cmos_fv_o <= r_cmos_fv_o + ((r_cmos_rx_vsync0_in == 2'b01) ? 1 : 0); 
 	end
-	assign led_o[5] = r_cmos_fv_o[3]; 
+	//-----------------------------------------------------------------
+	// ★ 2026-10-20 临时诊断（第二轮）：LED 显示 link 内部状态
+	//   低电平点亮，所以统一取反：**灯亮 = 条件为真**。
+	//   led_o[0] 亮 = link_en_active == 1（帧首已锁存到 'L' 的开关值）
+	//   led_o[1] 亮 = 本帧出现过传播条件 cond（弱边 + 切向种子 + 方向兼容）
+	//   led_o[2] 亮 = 本帧真的连出过 link（完整条件，含 enable/行列门控）
+	//   led_o[3] 亮 = lvds PLL 锁定   [4] 亮 = 四路 PLL 全锁
+	//   led_o[5] = clk_pixel 心跳（约 1 Hz 交替；计数器刻意不复位）
+	//   判读：led[1] 亮而 led[2] 灭 → 种子/方向没问题，卡在 enable/门控；
+	//         led[1] 也灭 → 传播条件在板上根本没成立。
+	//   诊断结束恢复：led_o[3:0]=w_axi_tp、led_o[5]=r_cmos_fv_o[3]。
+	//-----------------------------------------------------------------
+	reg [25:0] dbg_pix_cnt;
+	always @(posedge clk_pixel) dbg_pix_cnt <= dbg_pix_cnt + 1'b1;
+
+	assign led_o[0] = ~dbg_link_en;
+	assign led_o[1] = ~dbg_cond_seen;
+	assign led_o[2] = ~dbg_link_seen;
+	assign led_o[3] = ~lvds_pll_lock;
+	assign led_o[4] = ~w_pll_lock;
+	assign led_o[5] = dbg_pix_cnt[25];
+	//assign led_o[5] = r_cmos_fv_o[3];	// 原相机帧计数灯（诊断期间关闭）
 	
 	
 	
@@ -1048,7 +1069,7 @@ module example_top
 		
 		.tp_o 		(w_axi_tp)
 	);
-	assign led_o[3:0] = w_axi_tp; 
+	//assign led_o[3:0] = w_axi_tp; 	// 诊断期间改由 PLL lock 驱动，见上方 LED 诊断块
 	
 	
 	
@@ -1142,7 +1163,9 @@ localparam IMG_THR_DEF  = 8'd12; // Canny 强边阈值（内部 mag8 = mag>>3 �
                                  //      平滑模式），上板后不插串口、不重综合就能改；
                                  //      见下面的 canny_threshold_key_ctrl 例化。
                                  //    ★ 若以后把采集端修好（AWB/曝光/换打印纸卡），可以再抬回 16。
-localparam IMG_LINK_DEF = 1'b1;  // 方向约束流式边缘连接复位值：1 开 / 0 关
+localparam IMG_LINK_DEF = 1'b0;  // 方向约束流式边缘连接复位值：1 开 / 0 关
+                                 //   ★ 2026-10-19 方案A硬件A/B：先置 0（功能关，逻辑仍在），
+                                 //     与 HEAD 逐像素行为一致；用来判定黑屏是否由 link 功能引起。
                                  //   'L' 命令可运行时切换（view=2 下绿色 = 仅因传播保留的弱边）；
                                  //   关掉即退回"单遍滞后 + 1 像素膨胀"的旧行为，用来上板对比。
                                  //   反馈用 2 块 IMG_W×3bit 行缓存（ping-pong），不增加流水线延迟。
@@ -1152,6 +1175,11 @@ localparam IMG_LAT      = 19;    // = image_pipeline_top 的 LATENCY，两处必
 wire                                    pipe_vs                    ;
 wire                                    pipe_de                    ;
 wire                   [  23:0]         pipe_rgb                   ;
+// ★ 2026-10-20 临时诊断：link 内部状态，接 LED（见下方 LED 诊断块）
+wire                                    dbg_cond_pix               ;
+wire                                    dbg_link_en                ;
+wire                                    dbg_cond_seen              ;
+wire                                    dbg_link_seen              ;
 wire                   [   7:0]         w_img_thr                  ;
 wire                   [   7:0]         w_uart_thr                 ;   // uart_cmd 'T' 写入值
 wire                                    w_uart_thr_valid           ;   // 同拍单脉冲
@@ -1262,7 +1290,9 @@ canny_threshold_key_ctrl #(
     .key_press_o       (               )     // 单拍按下脉冲：只在板上用 ILA 才看得到
 );
 
-image_pipeline_top #(.IMG_W(1280),.IMG_H(720),.LATENCY(IMG_LAT)) u_image_pipeline(
+image_pipeline_top #(.IMG_W(1280),.IMG_H(720),.LATENCY(IMG_LAT),
+                     .DBG_LINK_COLOR(1),
+                     .LINK_TURN90(0),.LINK_GAP1(1),.WEAK_STRUCT(1)) u_image_pipeline(   // ★临时诊断：view2 洋红=条件成立被门控；弱结构保留开
     .clk_i                             (clk_pixel                 ),
     .rst_ni                            (rstn_pixel                ),
 
@@ -1282,7 +1312,12 @@ image_pipeline_top #(.IMG_W(1280),.IMG_H(720),.LATENCY(IMG_LAT)) u_image_pipelin
     // M6 调试抽头：中值后、Canny 实际看到的 Y/de/vs（不增加逻辑）
     .dbg_y_o                           (hist_y                    ),
     .dbg_de_o                          (hist_de                   ),
-    .dbg_vs_o                          (hist_vs                   )
+    .dbg_vs_o                          (hist_vs                   ),
+
+    .dbg_cond_o                        (dbg_cond_pix              ),
+    .dbg_link_en_o                     (dbg_link_en               ),
+    .dbg_cond_seen_o                   (dbg_cond_seen             ),
+    .dbg_link_seen_o                   (dbg_link_seen             )
 );
 
 //---------------------------------------------------------------------
