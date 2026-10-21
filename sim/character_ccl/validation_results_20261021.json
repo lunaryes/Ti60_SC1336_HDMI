@@ -1,0 +1,402 @@
+[
+  {
+    "name": "4",
+    "expected": "4",
+    "actual": "4",
+    "passed": true,
+    "overflow": 0,
+    "cycles": 2594401
+  },
+  {
+    "name": "B",
+    "expected": "B",
+    "actual": "B",
+    "passed": true,
+    "overflow": 0,
+    "cycles": 2593786
+  },
+  {
+    "name": "A",
+    "expected": "A",
+    "actual": "A",
+    "passed": true,
+    "overflow": 0,
+    "cycles": 2594615
+  },
+  {
+    "name": "7",
+    "expected": "7",
+    "actual": "7",
+    "passed": true,
+    "overflow": 0,
+    "cycles": 2594111
+  },
+  {
+    "name": "8",
+    "expected": "8",
+    "actual": "8",
+    "passed": true,
+    "overflow": 0,
+    "cycles": 2593381
+  },
+  {
+    "name": "Z",
+    "expected": "Z",
+    "actual": "Z",
+    "passed": true,
+    "overflow": 0,
+    "cycles": 2594085
+  },
+  {
+    "name": "AB",
+    "expected": "AB",
+    "actual": "AB",
+    "passed": true,
+    "overflow": 0,
+    "cycles": 2600977
+  },
+  {
+    "name": "outside_old_roi",
+    "expected": "A",
+    "actual": "A",
+    "passed": true,
+    "overflow": 0,
+    "cycles": 2594615
+  },
+  {
+    "name": "42",
+    "expected": "42",
+    "actual": "24",
+    "passed": true,
+    "overflow": 0,
+    "cycles": 2601177
+  },
+  {
+    "name": "empty",
+    "expected": "",
+    "actual": "",
+    "passed": true,
+    "overflow": 0,
+    "cycles": 2587424
+  },
+  {
+    "name": "bright4",
+    "expected": "4",
+    "actual": "4",
+    "passed": true,
+    "overflow": 0,
+    "cycles": 2594401
+  },
+  {
+    "name": "solid_circle_reject",
+    "expected": "",
+    "actual": "",
+    "passed": true,
+    "overflow": 0,
+    "cycles": 2585744
+  },
+  {
+    "name": "full_0",
+    "expected": "0",
+    "actual": "0",
+    "passed": true,
+    "overflow": 0,
+    "cycles": 2593790
+  },
+  {
+    "name": "full_1",
+    "expected": "1",
+    "actual": "1",
+    "passed": true,
+    "overflow": 0,
+    "cycles": 2593937
+  },
+  {
+    "name": "full_2",
+    "expected": "2",
+    "actual": "2",
+    "passed": true,
+    "overflow": 0,
+    "cycles": 2594774
+  },
+  {
+    "name": "full_3",
+    "expected": "3",
+    "actual": "3",
+    "passed": true,
+    "overflow": 0,
+    "cycles": 2594197
+  },
+  {
+    "name": "full_4",
+    "expected": "4",
+    "actual": "4",
+    "passed": true,
+    "overflow": 0,
+    "cycles": 2594139
+  },
+  {
+    "name": "full_5",
+    "expected": "5",
+    "actual": "5",
+    "passed": true,
+    "overflow": 0,
+    "cycles": 2594610
+  },
+  {
+    "name": "full_6",
+    "expected": "6",
+    "actual": "6",
+    "passed": true,
+    "overflow": 0,
+    "cycles": 2593943
+  },
+  {
+    "name": "full_7",
+    "expected": "7",
+    "actual": "7",
+    "passed": true,
+    "overflow": 0,
+    "cycles": 2594586
+  },
+  {
+    "name": "full_8",
+    "expected": "8",
+    "actual": "8",
+    "passed": true,
+    "overflow": 0,
+    "cycles": 2593736
+  },
+  {
+    "name": "full_9",
+    "expected": "9",
+    "actual": "9",
+    "passed": true,
+    "overflow": 0,
+    "cycles": 2593812
+  },
+  {
+    "name": "full_A",
+    "expected": "A",
+    "actual": "A",
+    "passed": true,
+    "overflow": 0,
+    "cycles": 2594730
+  },
+  {
+    "name": "full_B",
+    "expected": "B",
+    "actual": "B",
+    "passed": true,
+    "overflow": 0,
+    "cycles": 2595032
+  },
+  {
+    "name": "full_C",
+    "expected": "C",
+    "actual": "C",
+    "passed": true,
+    "overflow": 0,
+    "cycles": 2594903
+  },
+  {
+    "name": "full_E",
+    "expected": "E",
+    "actual": "E",
+    "passed": true,
+    "overflow": 0,
+    "cycles": 2596029
+  },
+  {
+    "name": "full_D",
+    "expected": "D",
+    "actual": "D",
+    "passed": true,
+    "overflow": 0,
+    "cycles": 2595161
+  },
+  {
+    "name": "full_F",
+    "expected": "F",
+    "actual": "F",
+    "passed": true,
+    "overflow": 0,
+    "cycles": 2595210
+  },
+  {
+    "name": "full_H",
+    "expected": "H",
+    "actual": "H",
+    "passed": true,
+    "overflow": 0,
+    "cycles": 2596432
+  },
+  {
+    "name": "full_G",
+    "expected": "G",
+    "actual": "G",
+    "passed": true,
+    "overflow": 0,
+    "cycles": 2595330
+  },
+  {
+    "name": "full_I",
+    "expected": "I",
+    "actual": "I",
+    "passed": true,
+    "overflow": 0,
+    "cycles": 2593803
+  },
+  {
+    "name": "full_J",
+    "expected": "J",
+    "actual": "J",
+    "passed": true,
+    "overflow": 0,
+    "cycles": 2594747
+  },
+  {
+    "name": "full_K",
+    "expected": "K",
+    "actual": "K",
+    "passed": true,
+    "overflow": 0,
+    "cycles": 2595859
+  },
+  {
+    "name": "full_L",
+    "expected": "L",
+    "actual": "L",
+    "passed": true,
+    "overflow": 0,
+    "cycles": 2594795
+  },
+  {
+    "name": "full_M",
+    "expected": "M",
+    "actual": "M",
+    "passed": true,
+    "overflow": 0,
+    "cycles": 2595704
+  },
+  {
+    "name": "full_N",
+    "expected": "N",
+    "actual": "N",
+    "passed": true,
+    "overflow": 0,
+    "cycles": 2595396
+  },
+  {
+    "name": "full_O",
+    "expected": "O",
+    "actual": "",
+    "passed": false,
+    "overflow": 0,
+    "cycles": 2594503
+  },
+  {
+    "name": "full_P",
+    "expected": "P",
+    "actual": "P",
+    "passed": true,
+    "overflow": 0,
+    "cycles": 2595208
+  },
+  {
+    "name": "full_Q",
+    "expected": "Q",
+    "actual": "Q",
+    "passed": true,
+    "overflow": 0,
+    "cycles": 2601200
+  },
+  {
+    "name": "full_R",
+    "expected": "R",
+    "actual": "R",
+    "passed": true,
+    "overflow": 0,
+    "cycles": 2595681
+  },
+  {
+    "name": "full_S",
+    "expected": "S",
+    "actual": "S",
+    "passed": true,
+    "overflow": 0,
+    "cycles": 2594619
+  },
+  {
+    "name": "full_T",
+    "expected": "T",
+    "actual": "T",
+    "passed": true,
+    "overflow": 0,
+    "cycles": 2594692
+  },
+  {
+    "name": "full_U",
+    "expected": "U",
+    "actual": "U",
+    "passed": true,
+    "overflow": 0,
+    "cycles": 2595275
+  },
+  {
+    "name": "full_V",
+    "expected": "V",
+    "actual": "V",
+    "passed": true,
+    "overflow": 0,
+    "cycles": 2594759
+  },
+  {
+    "name": "full_W",
+    "expected": "W",
+    "actual": "W",
+    "passed": true,
+    "overflow": 0,
+    "cycles": 2596472
+  },
+  {
+    "name": "full_X",
+    "expected": "X",
+    "actual": "X",
+    "passed": true,
+    "overflow": 0,
+    "cycles": 2594887
+  },
+  {
+    "name": "full_Y",
+    "expected": "Y",
+    "actual": "Y",
+    "passed": true,
+    "overflow": 0,
+    "cycles": 2594896
+  },
+  {
+    "name": "full_Z",
+    "expected": "Z",
+    "actual": "Z",
+    "passed": true,
+    "overflow": 0,
+    "cycles": 2594850
+  },
+  {
+    "name": "reject_triangle",
+    "expected": "",
+    "actual": "",
+    "passed": true,
+    "overflow": 0,
+    "cycles": 2585482
+  },
+  {
+    "name": "reject_rectangle",
+    "expected": "",
+    "actual": "",
+    "passed": true,
+    "overflow": 0,
+    "cycles": 2582660
+  }
+]

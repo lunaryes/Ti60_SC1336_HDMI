@@ -1342,6 +1342,18 @@ wire [10:0] overlay_x;
 wire [9:0]  overlay_y;
 wire [23:0] pipe_rgb_ocr;
 wire [23:0] pipe_rgb_detect;
+wire [23:0] pipe_rgb_all_detect;
+wire [167:0] character_objects;
+wire [3:0] character_valid;
+character_detection_top u_character_detection (
+    .clk(clk_pixel),.rst_n(rstn_pixel),.vsync_i(hist_vs),.de_i(hist_de),.gray_i(hist_y),
+    .objects_o(character_objects),.valid_o(character_valid),.busy_o(),.overflow_o(),.threshold_o()
+);
+character_overlay_cn u_character_overlay (
+    .x_i(overlay_x),.y_i(overlay_y),.de_i(pipe_de),.enable_i(ocr_overlay_enable),
+    .rgb_i(pipe_rgb_detect),.objects_i(character_objects),.valid_i(character_valid),
+    .legacy_recognized_i(ocr_recognized),.legacy_class_i(ocr_class_id),.rgb_o(pipe_rgb_all_detect)
+);
 wire [143:0] geometry_objects;
 wire [3:0] geometry_valid;
 shape_geometry_top u_geometry (
@@ -1442,7 +1454,7 @@ FrameBoundCrop #(.SKIP_ROWS(2),.SKIP_COLS(2),.TOTAL_ROWS(720),.TOTAL_COLS(1280))
     .vs_i                              (pipe_vs                   ),
     .hs_i                              (pipe_hs                   ),
     .de_i                              (pipe_de                   ),
-    .data_i                            (pipe_rgb_detect           ),
+    .data_i                            (pipe_rgb_all_detect       ),
 
     .vs_o                              (boundcrop_vs              ),
     .hs_o                              (boundcrop_hs              ),
