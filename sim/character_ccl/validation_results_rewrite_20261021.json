@@ -1,0 +1,589 @@
+{
+  "note": "63严格符合预期，1例O/0歧义拒识；并非实拍准确率。63例扩展套件及1例AB42分两次运行。",
+  "rtl_sha256": {
+    "character_ccl_engine.v": "f28000ba1ba641e1956b54ee8927d56fecdee2513abb225a29902c198d7cc22d",
+    "character_detection_top.v": "286b83b32aa294ba03997a6801e6a13f15fc97b54f56c5baf885d2a63ad6e591",
+    "character_font16_rom.v": "3d39cb069e244346aa6906b657b3d16770416a37243813f78f35ab7e17820f8e",
+    "character_frame_capture.v": "54ef60976289d7c15d5e7d7ffb5834348a603c37ed0324ff12dd83b5709f5d4a",
+    "character_matcher16.v": "eb98e6e63fead40890fdce0fa4e1d5f922093f82f8040dbb7df791363f3dfca5",
+    "character_overlay_cn.v": "84890ee5f0921a75ea184a40ccccb9ca8598fd5a0b8e32e279ef08dd802ad360"
+  },
+  "results": [
+    {
+      "name": "4",
+      "expected": "4",
+      "actual": "4",
+      "passed": true,
+      "safe_reject": false,
+      "overflow": 0,
+      "cycles": 2638924
+    },
+    {
+      "name": "B",
+      "expected": "B",
+      "actual": "B",
+      "passed": true,
+      "safe_reject": false,
+      "overflow": 0,
+      "cycles": 2639542
+    },
+    {
+      "name": "A",
+      "expected": "A",
+      "actual": "A",
+      "passed": true,
+      "safe_reject": false,
+      "overflow": 0,
+      "cycles": 2639483
+    },
+    {
+      "name": "8",
+      "expected": "8",
+      "actual": "8",
+      "passed": true,
+      "safe_reject": false,
+      "overflow": 0,
+      "cycles": 2637957
+    },
+    {
+      "name": "7",
+      "expected": "7",
+      "actual": "7",
+      "passed": true,
+      "safe_reject": false,
+      "overflow": 0,
+      "cycles": 2638066
+    },
+    {
+      "name": "Z",
+      "expected": "Z",
+      "actual": "Z",
+      "passed": true,
+      "safe_reject": false,
+      "overflow": 0,
+      "cycles": 2638842
+    },
+    {
+      "name": "outside_old_roi",
+      "expected": "A",
+      "actual": "A",
+      "passed": true,
+      "safe_reject": false,
+      "overflow": 0,
+      "cycles": 2639483
+    },
+    {
+      "name": "AB",
+      "expected": "AB",
+      "actual": "AB",
+      "passed": true,
+      "safe_reject": false,
+      "overflow": 0,
+      "cycles": 2683921
+    },
+    {
+      "name": "42",
+      "expected": "42",
+      "actual": "24",
+      "passed": true,
+      "safe_reject": false,
+      "overflow": 0,
+      "cycles": 2682553
+    },
+    {
+      "name": "empty",
+      "expected": "",
+      "actual": "",
+      "passed": true,
+      "safe_reject": false,
+      "overflow": 0,
+      "cycles": 2595104
+    },
+    {
+      "name": "bright4",
+      "expected": "4",
+      "actual": "4",
+      "passed": true,
+      "safe_reject": false,
+      "overflow": 0,
+      "cycles": 2638924
+    },
+    {
+      "name": "solid_circle_reject",
+      "expected": "",
+      "actual": "",
+      "passed": true,
+      "safe_reject": false,
+      "overflow": 0,
+      "cycles": 2659968
+    },
+    {
+      "name": "full_0",
+      "expected": "0",
+      "actual": "0",
+      "passed": true,
+      "safe_reject": false,
+      "overflow": 0,
+      "cycles": 2638514
+    },
+    {
+      "name": "full_1",
+      "expected": "1",
+      "actual": "1",
+      "passed": true,
+      "safe_reject": false,
+      "overflow": 0,
+      "cycles": 2638809
+    },
+    {
+      "name": "full_2",
+      "expected": "2",
+      "actual": "2",
+      "passed": true,
+      "safe_reject": false,
+      "overflow": 0,
+      "cycles": 2639002
+    },
+    {
+      "name": "full_3",
+      "expected": "3",
+      "actual": "3",
+      "passed": true,
+      "safe_reject": false,
+      "overflow": 0,
+      "cycles": 2638738
+    },
+    {
+      "name": "full_4",
+      "expected": "4",
+      "actual": "4",
+      "passed": true,
+      "safe_reject": false,
+      "overflow": 0,
+      "cycles": 2638958
+    },
+    {
+      "name": "full_5",
+      "expected": "5",
+      "actual": "5",
+      "passed": true,
+      "safe_reject": false,
+      "overflow": 0,
+      "cycles": 2639448
+    },
+    {
+      "name": "full_7",
+      "expected": "7",
+      "actual": "7",
+      "passed": true,
+      "safe_reject": false,
+      "overflow": 0,
+      "cycles": 2638590
+    },
+    {
+      "name": "full_6",
+      "expected": "6",
+      "actual": "6",
+      "passed": true,
+      "safe_reject": false,
+      "overflow": 0,
+      "cycles": 2639041
+    },
+    {
+      "name": "full_8",
+      "expected": "8",
+      "actual": "8",
+      "passed": true,
+      "safe_reject": false,
+      "overflow": 0,
+      "cycles": 2638770
+    },
+    {
+      "name": "full_A",
+      "expected": "A",
+      "actual": "A",
+      "passed": true,
+      "safe_reject": false,
+      "overflow": 0,
+      "cycles": 2639924
+    },
+    {
+      "name": "full_9",
+      "expected": "9",
+      "actual": "9",
+      "passed": true,
+      "safe_reject": false,
+      "overflow": 0,
+      "cycles": 2639066
+    },
+    {
+      "name": "full_B",
+      "expected": "B",
+      "actual": "B",
+      "passed": true,
+      "safe_reject": false,
+      "overflow": 0,
+      "cycles": 2640402
+    },
+    {
+      "name": "full_D",
+      "expected": "D",
+      "actual": "D",
+      "passed": true,
+      "safe_reject": false,
+      "overflow": 0,
+      "cycles": 2640488
+    },
+    {
+      "name": "full_C",
+      "expected": "C",
+      "actual": "C",
+      "passed": true,
+      "safe_reject": false,
+      "overflow": 0,
+      "cycles": 2639879
+    },
+    {
+      "name": "full_E",
+      "expected": "E",
+      "actual": "E",
+      "passed": true,
+      "safe_reject": false,
+      "overflow": 0,
+      "cycles": 2641448
+    },
+    {
+      "name": "full_F",
+      "expected": "F",
+      "actual": "F",
+      "passed": true,
+      "safe_reject": false,
+      "overflow": 0,
+      "cycles": 2639889
+    },
+    {
+      "name": "full_G",
+      "expected": "G",
+      "actual": "G",
+      "passed": true,
+      "safe_reject": false,
+      "overflow": 0,
+      "cycles": 2641104
+    },
+    {
+      "name": "full_H",
+      "expected": "H",
+      "actual": "H",
+      "passed": true,
+      "safe_reject": false,
+      "overflow": 0,
+      "cycles": 2641892
+    },
+    {
+      "name": "full_I",
+      "expected": "I",
+      "actual": "I",
+      "passed": true,
+      "safe_reject": false,
+      "overflow": 0,
+      "cycles": 2637919
+    },
+    {
+      "name": "full_J",
+      "expected": "J",
+      "actual": "J",
+      "passed": true,
+      "safe_reject": false,
+      "overflow": 0,
+      "cycles": 2639223
+    },
+    {
+      "name": "full_K",
+      "expected": "K",
+      "actual": "K",
+      "passed": true,
+      "safe_reject": false,
+      "overflow": 0,
+      "cycles": 2640689
+    },
+    {
+      "name": "full_L",
+      "expected": "L",
+      "actual": "L",
+      "passed": true,
+      "safe_reject": false,
+      "overflow": 0,
+      "cycles": 2639107
+    },
+    {
+      "name": "full_M",
+      "expected": "M",
+      "actual": "M",
+      "passed": true,
+      "safe_reject": false,
+      "overflow": 0,
+      "cycles": 2641938
+    },
+    {
+      "name": "full_N",
+      "expected": "N",
+      "actual": "N",
+      "passed": true,
+      "safe_reject": false,
+      "overflow": 0,
+      "cycles": 2641493
+    },
+    {
+      "name": "full_O",
+      "expected": "O",
+      "actual": "",
+      "passed": false,
+      "safe_reject": true,
+      "overflow": 0,
+      "cycles": 2639484
+    },
+    {
+      "name": "full_P",
+      "expected": "P",
+      "actual": "P",
+      "passed": true,
+      "safe_reject": false,
+      "overflow": 0,
+      "cycles": 2640128
+    },
+    {
+      "name": "full_Q",
+      "expected": "Q",
+      "actual": "Q",
+      "passed": true,
+      "safe_reject": false,
+      "overflow": 0,
+      "cycles": 2640038
+    },
+    {
+      "name": "full_R",
+      "expected": "R",
+      "actual": "R",
+      "passed": true,
+      "safe_reject": false,
+      "overflow": 0,
+      "cycles": 2641075
+    },
+    {
+      "name": "full_S",
+      "expected": "S",
+      "actual": "S",
+      "passed": true,
+      "safe_reject": false,
+      "overflow": 0,
+      "cycles": 2639684
+    },
+    {
+      "name": "full_T",
+      "expected": "T",
+      "actual": "T",
+      "passed": true,
+      "safe_reject": false,
+      "overflow": 0,
+      "cycles": 2639943
+    },
+    {
+      "name": "full_U",
+      "expected": "U",
+      "actual": "U",
+      "passed": true,
+      "safe_reject": false,
+      "overflow": 0,
+      "cycles": 2640766
+    },
+    {
+      "name": "full_V",
+      "expected": "V",
+      "actual": "V",
+      "passed": true,
+      "safe_reject": false,
+      "overflow": 0,
+      "cycles": 2639657
+    },
+    {
+      "name": "full_W",
+      "expected": "W",
+      "actual": "W",
+      "passed": true,
+      "safe_reject": false,
+      "overflow": 0,
+      "cycles": 2642592
+    },
+    {
+      "name": "full_X",
+      "expected": "X",
+      "actual": "X",
+      "passed": true,
+      "safe_reject": false,
+      "overflow": 0,
+      "cycles": 2639935
+    },
+    {
+      "name": "full_Y",
+      "expected": "Y",
+      "actual": "Y",
+      "passed": true,
+      "safe_reject": false,
+      "overflow": 0,
+      "cycles": 2639437
+    },
+    {
+      "name": "full_Z",
+      "expected": "Z",
+      "actual": "Z",
+      "passed": true,
+      "safe_reject": false,
+      "overflow": 0,
+      "cycles": 2639981
+    },
+    {
+      "name": "reject_triangle",
+      "expected": "",
+      "actual": "",
+      "passed": true,
+      "safe_reject": false,
+      "overflow": 0,
+      "cycles": 2599466
+    },
+    {
+      "name": "reject_rectangle",
+      "expected": "",
+      "actual": "",
+      "passed": true,
+      "safe_reject": false,
+      "overflow": 0,
+      "cycles": 2652786
+    },
+    {
+      "name": "camera_crop_1",
+      "expected": "1",
+      "actual": "1",
+      "passed": true,
+      "safe_reject": false,
+      "overflow": 0,
+      "cycles": 2639154
+    },
+    {
+      "name": "camera_crop_2",
+      "expected": "2",
+      "actual": "2",
+      "passed": true,
+      "safe_reject": false,
+      "overflow": 0,
+      "cycles": 2641137
+    },
+    {
+      "name": "camera_crop_3",
+      "expected": "3",
+      "actual": "3",
+      "passed": true,
+      "safe_reject": false,
+      "overflow": 0,
+      "cycles": 2640577
+    },
+    {
+      "name": "reject_lower_a",
+      "expected": "",
+      "actual": "",
+      "passed": true,
+      "safe_reject": false,
+      "overflow": 0,
+      "cycles": 2638411
+    },
+    {
+      "name": "clutter_300_components",
+      "expected": "4",
+      "actual": "4",
+      "passed": true,
+      "safe_reject": false,
+      "overflow": 0,
+      "cycles": 2631546
+    },
+    {
+      "name": "reject_face",
+      "expected": "",
+      "actual": "",
+      "passed": true,
+      "safe_reject": false,
+      "overflow": 0,
+      "cycles": 2699566
+    },
+    {
+      "name": "outline_A",
+      "expected": "A",
+      "actual": "A",
+      "passed": true,
+      "safe_reject": false,
+      "overflow": 0,
+      "cycles": 2684434
+    },
+    {
+      "name": "outline_B",
+      "expected": "B",
+      "actual": "B",
+      "passed": true,
+      "safe_reject": false,
+      "overflow": 0,
+      "cycles": 2644383
+    },
+    {
+      "name": "outline_4",
+      "expected": "4",
+      "actual": "4",
+      "passed": true,
+      "safe_reject": false,
+      "overflow": 0,
+      "cycles": 2683598
+    },
+    {
+      "name": "outline_8",
+      "expected": "8",
+      "actual": "8",
+      "passed": true,
+      "safe_reject": false,
+      "overflow": 0,
+      "cycles": 2683840
+    },
+    {
+      "name": "serif_italic_1",
+      "expected": "1",
+      "actual": "1",
+      "passed": true,
+      "safe_reject": false,
+      "overflow": 0,
+      "cycles": 2638312
+    },
+    {
+      "name": "serif_italic_2",
+      "expected": "2",
+      "actual": "2",
+      "passed": true,
+      "safe_reject": false,
+      "overflow": 0,
+      "cycles": 2638564
+    },
+    {
+      "name": "serif_italic_7",
+      "expected": "7",
+      "actual": "7",
+      "passed": true,
+      "safe_reject": false,
+      "overflow": 0,
+      "cycles": 2638450
+    },
+    {
+      "name": "AB42",
+      "expected": "AB42",
+      "actual": "AB24",
+      "passed": true,
+      "safe_reject": false,
+      "overflow": 0,
+      "cycles": 2771402
+    }
+  ]
+}

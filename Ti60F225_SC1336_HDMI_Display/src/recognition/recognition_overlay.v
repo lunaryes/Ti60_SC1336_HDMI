@@ -3,7 +3,7 @@
 // bit-for-bit passthrough. Neither this block nor OCR controls video timing.
 module recognition_overlay #(
     parameter integer ROI_X0=320,ROI_Y0=120,ROI_W=640,ROI_H=480,
-    parameter integer TEXT_X=24,TEXT_Y=24,SCALE=4
+    parameter integer TEXT_X=24,TEXT_Y=24,SCALE=4,SHOW_LEGACY=1
 )(
     input wire [10:0] x_i,input wire [9:0] y_i,input wire de_i,enable_i,
     input wire [23:0] rgb_i,
@@ -57,10 +57,10 @@ module recognition_overlay #(
     always @(*) begin
         rgb_o=rgb_i;
         if(enable_i && de_i) begin
-            if(roi_border) rgb_o=24'hff8000;
-            if(bbox_border) rgb_o=valid_result?24'h00ff00:24'hffff00;
-            if(in_sample) rgb_o=bbox_valid_i&&glyph_i[sample_bit]?24'hffffff:24'h202020;
-            if(in_template) rgb_o=valid_result&&template_i[template_bit]?24'h00ff00:24'h202020;
+            if(SHOW_LEGACY&&roi_border) rgb_o=24'hff8000;
+            if(SHOW_LEGACY&&bbox_border) rgb_o=valid_result?24'h00ff00:24'hffff00;
+            if(SHOW_LEGACY&&in_sample) rgb_o=bbox_valid_i&&glyph_i[sample_bit]?24'hffffff:24'h202020;
+            if(SHOW_LEGACY&&in_template) rgb_o=valid_result&&template_i[template_bit]?24'h00ff00:24'h202020;
             if(in_status) rgb_o=digit_row_valid&&digit_bitmap[digit_bit]?(second_line?24'hffff00:24'h00ffff):24'h202020;
         end
     end

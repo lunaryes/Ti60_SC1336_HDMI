@@ -13,14 +13,15 @@ module tb_character_end_to_end;
    de=0;gray=255;repeat(4) @(negedge clk);
   end
   repeat(50) @(negedge clk);
-  t=0;while(busy&&t<6100000) begin @(negedge clk);t=t+1;end
+  t=0;while(busy&&t<12100000) begin @(negedge clk);t=t+1;end
   if(busy||overflow) $fatal(1,"engine timeout/overflow");
+  repeat(80) @(negedge clk); // 空间跟踪 FSM 完成后，再模拟下一场边界。
  end endtask
  initial begin
   if(!$value$plusargs("FILE=%s",filename)) $fatal(1,"FILE required");$readmemh(filename,image);
   repeat(3) @(negedge clk);rst=1;
   frame();if(!dut.contrast) $fatal(1,"small glyph omitted by contrast calibration");
-  frame();frame();
+  frame();frame();frame();
   @(negedge clk);vs=1;repeat(3) @(negedge clk);
   if(valid!=1||objects[41:34]!="4") $fatal(1,"end-to-end missing digit 4: valid=%b ascii=%h",valid,objects[41:34]);
   $display("PASS full 1280x720 grayscale -> adaptive threshold -> CCL -> normalization -> matcher -> stable result; threshold=%0d",threshold);$finish;

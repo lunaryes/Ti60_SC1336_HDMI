@@ -2,8 +2,10 @@
 
 易灵思 Titanium Ti60F225 + SC1336 摄像头 + HDMI 1280×720 实时边缘检测。
 
-本分支加入单印刷字符OCR V3：640×480搜索区、16×16特征、多字体匹配、无效帧清除。
-使用范围和诊断见 [OCR V3说明](docs/OCR_V3_CAMERA.md)，
+本版使用全屏 CCL 字符分割、常规/细线双采样、中文标注与位置跟踪，保留图形 CCL/Moore 检测。
+支持数字 0～9、大写 A～Z，最多同时显示 4 个字符；O/0 等歧义允许拒识，不是整页通用 OCR。
+新版使用范围见 [字符识别重写说明](docs/OCR_REWRITE_20261021.md)，
+实测范围及硬件时序见 [重写验证记录](docs/OCR_REWRITE_VALIDATION_20261021.md)。旧版资料保留在 [OCR V3说明](docs/OCR_V3_CAMERA.md)，
 Canny基线/像素保真验证见 [回归记录](docs/CANNY_BASELINE_AUDIT.md)。
 UART `4F 00`/`4F 01` 可立即关闭/开启识别标注，便于对比同一画面的Canny边缘。
 

@@ -1,37 +1,42 @@
 `timescale 1ns/1ps
 // 无卡片字符分割：八连通两遍 CCL，等价标签表 + 片内标签图。
 // 不使用外框推断字符位置。直接裁紧每个前景连通域并统计 16x16 占比。
-// 原有几何 CCL/Moore 和高分辨率单字符 OCR 不作修改。
+// 裁剪内保留同极性的其它笔画，不能把“脸框里的眼鼻嘴”抹掉后误当 O。
 module character_ccl_engine #(
- parameter integer W=320,H=180,AW=$clog2(W*H),MAX_CANDIDATES=32,
- parameter integer MIN_HEIGHT=14,MAX_HEIGHT=128
+ parameter integer W=320,H=180,AW=$clog2(W*H),MAX_CANDIDATES=64,
+ parameter integer MIN_HEIGHT=10,MAX_HEIGHT=128,LABEL_BITS=10
 )(
  input wire clk,rst_n,start_i,output reg busy_o,done_o,
- output reg [AW-1:0] raw_addr_o,input wire [1:0] raw_data_i,
+ output reg [AW-1:0] raw_addr_o,input wire [3:0] raw_data_i,
  // 每项 {ASCII[7:0],xmin[8:0],xmax[8:0],ymin[7:0],ymax[7:0]}。
  output reg [167:0] objects_o,output reg [3:0] valid_o,
  output reg overflow_o,output reg [23:0] cycles_o
 );
- localparam integer N=W*H;
+ localparam integer N=W*H, LABEL_COUNT=1<<LABEL_BITS;
  localparam IDLE=0,RAW_ISS=1,RAW_WAIT=2,RAW_EVAL=3,NB_ISS=4,NB_WAIT=5,NB_EVAL=6,
    ROOT_ISS=7,ROOT_WAIT=8,ROOT_EVAL=9,ASSIGN=10,ADV=11,
    CLEAR_STATS=12,P2_ISS=13,P2_WAIT=14,P2_EVAL=15,STATS_ISS=16,STATS_WAIT=17,
    STATS_WRITE=18,P2_ADV=19,CAND_ISS=20,CAND_WAIT=21,CAND_EVAL=22,
    BIN_SETUP=23,BIN_ISS=24,BIN_WAIT=25,BIN_EVAL=26,BIN_STORE=27,
-   MATCH_START=28,MATCH_WAIT=29,CAND_ADV=30,NEXT_POLARITY=31,PUBLISH=32;
+   MATCH_START=28,MATCH_WAIT=29,CAND_ADV=30,NEXT_POLARITY=31,PUBLISH=32,
+   HIER_ISS=33,HIER_WAIT=34,HIER_EVAL=35;
  reg [5:0] state;reg polarity,second_pass;
  reg label_we,parent_we,stats_we;
- reg [AW-1:0] label_wa,label_ra;reg [7:0] label_wd;wire [7:0] label_rd;
- reg [7:0] parent_wa,parent_ra,parent_wd;wire [7:0] parent_rd;
- reg [7:0] stats_wa,stats_ra;reg [49:0] stats_wd;wire [49:0] stats_rd;
- shape_sdp_ram #(.WIDTH(8),.DEPTH(N),.AW(AW)) u_labels(clk,label_we,label_wa,label_ra,label_wd,label_rd);
- shape_sdp_ram #(.WIDTH(8),.DEPTH(256),.AW(8)) u_parent(clk,parent_we,parent_wa,parent_ra,parent_wd,parent_rd);
- shape_sdp_ram #(.WIDTH(50),.DEPTH(256),.AW(8)) u_stats(clk,stats_we,stats_wa,stats_ra,stats_wd,stats_rd);
- reg [AW-1:0] index;reg [8:0] x;reg [7:0] y,left_label,root_min,root;
- reg [8:0] next_label;reg [1:0] nb;
- reg [7:0] clear_label,candidate_label;reg [5:0] candidates;
+ reg [AW-1:0] label_wa,label_ra;reg [LABEL_BITS-1:0] label_wd;wire [LABEL_BITS-1:0] label_rd;
+ reg [LABEL_BITS-1:0] parent_wa,parent_ra,parent_wd;wire [LABEL_BITS-1:0] parent_rd;
+ reg [LABEL_BITS-1:0] stats_wa,stats_ra;reg [49:0] stats_wd;wire [49:0] stats_rd;
+ shape_sdp_ram #(.WIDTH(LABEL_BITS),.DEPTH(N),.AW(AW)) u_labels(clk,label_we,label_wa,label_ra,label_wd,label_rd);
+ shape_sdp_ram #(.WIDTH(LABEL_BITS),.DEPTH(LABEL_COUNT),.AW(LABEL_BITS)) u_parent(clk,parent_we,parent_wa,parent_ra,parent_wd,parent_rd);
+ shape_sdp_ram #(.WIDTH(50),.DEPTH(LABEL_COUNT),.AW(LABEL_BITS)) u_stats(clk,stats_we,stats_wa,stats_ra,stats_wd,stats_rd);
+ reg [AW-1:0] index;reg [8:0] x;reg [7:0] y;
+ reg [LABEL_BITS-1:0] left_label,root_min,root;
+ reg [LABEL_BITS:0] next_label;reg [1:0] nb;
+ reg [LABEL_BITS-1:0] clear_label,candidate_label;reg [7:0] candidates;
  reg [1:0] object_count;reg [167:0] pending_objects;reg [3:0] pending_valid;
  reg [23:0] work_cycles;
+ reg bbox_we;reg [5:0] bbox_wa,bbox_ra,hier_index;reg [33:0] bbox_wd;wire [33:0] bbox_rd;
+ reg [6:0] dark_count;
+ shape_sdp_ram #(.WIDTH(34),.DEPTH(64),.AW(6)) u_boxes(clk,bbox_we,bbox_wa,bbox_ra,bbox_wd,bbox_rd);
  reg [8:0] xmin,xmax;reg [7:0] ymin,ymax;
  wire [9:0] box_w={1'b0,stats_rd[17:9]}-{1'b0,stats_rd[8:0]}+1'b1;
  wire [8:0] box_h={1'b0,stats_rd[33:26]}-{1'b0,stats_rd[25:18]}+1'b1;
@@ -40,7 +45,7 @@ module character_ccl_engine #(
  wire candidate_ok=area>=16 && box_h>=MIN_HEIGHT && box_h<=MAX_HEIGHT && box_w>=2&&box_w<=128&&
    stats_rd[8:0]>1&&stats_rd[17:9]<W-2&&stats_rd[25:18]>1&&stats_rd[33:26]<H-2&&
    box_w*8>=box_h && box_w*2<=box_h*3 && area*12>=box_area &&
-   (area*4<box_area*3 || box_w*4<box_h);
+   (area*8<box_area*7 || box_w*4<box_h);
  reg [3:0] bin_x,bin_y;reg [8:0] bx0,bx1,px;reg [7:0] by0,by1,py;
  reg [9:0] width;reg [8:0] height;
  wire [13:0] xb0=bin_x*width+15;
@@ -52,11 +57,28 @@ module character_ccl_engine #(
  wire [8:0] sample_x1=width<16?(bin_x*width)>>4:(xb1>>4)-1'b1;
  wire [7:0] sample_y0=height<16?(bin_y*height)>>4:yb0>>4;
  wire [7:0] sample_y1=height<16?(bin_y*height)>>4:(yb1>>4)-1'b1;
- reg [7:0] hits,total;reg [255:0] glyph;reg match_start;
+ reg [7:0] hits,total,hits_strong;reg [255:0] glyph,glyph_strong;
+ reg match_start,match_phase,strong_ok;reg [7:0] strong_ascii;reg [8:0] glyph_cells,strong_cells;
+ wire bin_foreground=total!=0&&({2'b0,hits}<<2)>=total;
+ // 反极性“大块背景+少量孔洞”不能伪装成粗体 M；I/1 等窄字保留例外。
+ wire glyph_valid=(match_phase?glyph_cells:strong_cells)<=216||width*4<height;
  wire match_done,recognized;wire [5:0] matched_class;wire [7:0] matched_ascii;
  wire [8:0] best,second;wire [255:0] matched_template;
- character_matcher16 u_matcher(.clk(clk),.rst_n(rst_n),.start_i(match_start),.candidate_valid_i(1'b1),
-   .glyph_i(glyph),.width_i({1'b0,width}),.height_i({1'b0,height}),.result_valid_o(match_done),
+ integer oi,free_index;reg nested;reg [41:0] existing;reg [3:0] keep_valid;
+ always @(*) begin
+  nested=0;existing=0;keep_valid=pending_valid;free_index=-1;
+  for(oi=0;oi<4;oi=oi+1) begin
+   existing=pending_objects[oi*42+:42];
+   if(pending_valid[oi]&&xmin>=existing[33:25]&&xmax<=existing[24:16]&&
+      ymin>=existing[15:8]&&ymax<=existing[7:0]) nested=1;
+   // 较大的反极性外轮廓替换先前误选的内部孔洞，而不是重复追加。
+   if(polarity&&pending_valid[oi]&&xmin<=existing[33:25]&&xmax>=existing[24:16]&&
+      ymin<=existing[15:8]&&ymax>=existing[7:0]) keep_valid[oi]=0;
+  end
+  for(oi=3;oi>=0;oi=oi-1) if(!keep_valid[oi]) free_index=oi;
+ end
+ character_matcher16 u_matcher(.clk(clk),.rst_n(rst_n),.start_i(match_start),.candidate_valid_i(glyph_valid),
+   .glyph_i(match_phase?glyph:glyph_strong),.width_i({1'b0,width}),.height_i({1'b0,height}),.result_valid_o(match_done),
    .recognized_o(recognized),.class_id_o(matched_class),.ascii_o(matched_ascii),
    .best_distance_o(best),.second_distance_o(second),.template_o(matched_template));
  reg [49:0] updated_stats;
@@ -80,16 +102,19 @@ module character_ccl_engine #(
    polarity<=0;second_pass<=0;clear_label<=0;candidate_label<=0;candidates<=0;
    object_count<=0;pending_objects<=0;pending_valid<=0;work_cycles<=0;
    xmin<=0;xmax<=0;ymin<=0;ymax<=0;width<=0;height<=0;
-   bin_x<=0;bin_y<=0;bx0<=0;bx1<=0;by0<=0;by1<=0;px<=0;py<=0;hits<=0;total<=0;glyph<=0;match_start<=0;
+   bin_x<=0;bin_y<=0;bx0<=0;bx1<=0;by0<=0;by1<=0;px<=0;py<=0;hits<=0;total<=0;glyph<=0;match_start<=0;glyph_cells<=0;
+   hits_strong<=0;glyph_strong<=0;strong_cells<=0;match_phase<=0;strong_ok<=0;strong_ascii<=0;
+   bbox_we<=0;bbox_wa<=0;bbox_ra<=0;bbox_wd<=0;hier_index<=0;dark_count<=0;
   end else begin
-   done_o<=0;label_we<=0;parent_we<=0;stats_we<=0;match_start<=0;
+   done_o<=0;label_we<=0;parent_we<=0;stats_we<=0;match_start<=0;bbox_we<=0;
    if(busy_o) work_cycles<=work_cycles+1'b1;
-   if(busy_o&&work_cycles==24'd6000000) begin
+   if(busy_o&&work_cycles==24'd12000000) begin
      objects_o<=0;valid_o<=0;overflow_o<=1;cycles_o<=work_cycles;done_o<=1;busy_o<=0;state<=IDLE;
    end else case(state)
     IDLE:if(start_i) begin
       busy_o<=1;work_cycles<=0;overflow_o<=0;polarity<=0;second_pass<=0;
       pending_objects<=0;pending_valid<=0;object_count<=0;candidates<=0;
+      dark_count<=0;
       next_label<=1;index<=0;x<=0;y<=0;left_label<=0;state<=RAW_ISS;
     end
     RAW_ISS:begin raw_addr_o<=index;state<=RAW_WAIT;end
@@ -130,12 +155,12 @@ module character_ccl_engine #(
       end
     end
     ASSIGN:begin
-      if(root_min==0&&next_label==256) begin overflow_o<=1;pending_valid<=0;state<=PUBLISH;end
+      if(root_min==0&&next_label==LABEL_COUNT) begin overflow_o<=1;pending_valid<=0;state<=PUBLISH;end
       else begin
-        label_we<=1;label_wa<=index;label_wd<=root_min==0?next_label[7:0]:root_min;
-        left_label<=root_min==0?next_label[7:0]:root_min;
+        label_we<=1;label_wa<=index;label_wd<=root_min==0?next_label[LABEL_BITS-1:0]:root_min;
+        left_label<=root_min==0?next_label[LABEL_BITS-1:0]:root_min;
         if(root_min==0) begin
-          parent_we<=1;parent_wa<=next_label[7:0];parent_wd<=next_label[7:0];next_label<=next_label+1'b1;
+          parent_we<=1;parent_wa<=next_label[LABEL_BITS-1:0];parent_wd<=next_label[LABEL_BITS-1:0];next_label<=next_label+1'b1;
         end
         state<=ADV;
       end
@@ -150,7 +175,7 @@ module character_ccl_engine #(
     end
     CLEAR_STATS:begin
       stats_we<=1;stats_wa<=clear_label;stats_wd<=0;
-      if(clear_label==255) begin index<=0;x<=0;y<=0;second_pass<=1;state<=P2_ISS;end
+      if(clear_label==LABEL_COUNT-1) begin index<=0;x<=0;y<=0;second_pass<=1;state<=P2_ISS;end
       else clear_label<=clear_label+1'b1;
     end
     P2_ISS:begin label_ra<=index;state<=P2_WAIT;end
@@ -175,43 +200,66 @@ module character_ccl_engine #(
     CAND_ISS:begin stats_ra<=candidate_label;state<=CAND_WAIT;end
     CAND_WAIT:state<=CAND_EVAL;
     CAND_EVAL:begin
-      if(candidate_ok&&candidates<MAX_CANDIDATES&&pending_valid!=4'b1111) begin
+      if(candidate_ok&&candidates<MAX_CANDIDATES) begin
         xmin<=stats_rd[8:0];xmax<=stats_rd[17:9];ymin<=stats_rd[25:18];ymax<=stats_rd[33:26];
-        width<=box_w;height<=box_h;bin_x<=0;bin_y<=0;glyph<=0;candidates<=candidates+1'b1;state<=BIN_SETUP;
+        width<=box_w;height<=box_h;bin_x<=0;bin_y<=0;glyph<=0;glyph_cells<=0;
+        glyph_strong<=0;strong_cells<=0;match_phase<=0;strong_ok<=0;candidates<=candidates+1'b1;
+        if(!polarity) begin
+          if(dark_count<64) begin bbox_we<=1;bbox_wa<=dark_count[5:0];bbox_wd<=stats_rd[33:0];dark_count<=dark_count+1'b1;end
+          state<=BIN_SETUP;
+        end else if(dark_count!=0) begin hier_index<=0;state<=HIER_ISS;end
+        else state<=BIN_SETUP;
       end else state<=CAND_ADV;
+    end
+    HIER_ISS:begin bbox_ra<=hier_index;state<=HIER_WAIT;end
+    HIER_WAIT:state<=HIER_EVAL;
+    HIER_EVAL:begin
+      // 表中沿用 stats 的 {ymax,ymin,xmax,xmin} 布局。
+      if(xmin>=bbox_rd[8:0]&&xmax<=bbox_rd[17:9]&&ymin>=bbox_rd[25:18]&&ymax<=bbox_rd[33:26]) state<=CAND_ADV;
+      else if({1'b0,hier_index}+1>=dark_count) state<=BIN_SETUP;
+      else begin hier_index<=hier_index+1'b1;state<=HIER_ISS;end
     end
     BIN_SETUP:begin
       bx0<=sample_x0;bx1<=sample_x1;by0<=sample_y0;by1<=sample_y1;
-      px<=sample_x0;py<=sample_y0;hits<=0;total<=0;state<=BIN_ISS;
+      px<=sample_x0;py<=sample_y0;hits<=0;hits_strong<=0;total<=0;state<=BIN_ISS;
     end
-    BIN_ISS:begin label_ra<=(ymin+py)*W+xmin+px;state<=BIN_WAIT;end
+    BIN_ISS:begin label_ra<=(ymin+py)*W+xmin+px;raw_addr_o<=(ymin+py)*W+xmin+px;state<=BIN_WAIT;end
     BIN_WAIT:state<=BIN_EVAL;
     BIN_EVAL:begin
-      total<=total+1'b1;if(label_rd==candidate_label) hits<=hits+1'b1;
+      total<=total+1'b1;if(label_rd!=0) hits<=hits+1'b1;
+      if(raw_data_i[2+polarity]) hits_strong<=hits_strong+1'b1;
       if(px==bx1) begin
         px<=bx0;if(py==by1) state<=BIN_STORE;else begin py<=py+1'b1;state<=BIN_ISS;end
       end else begin px<=px+1'b1;state<=BIN_ISS;end
     end
     BIN_STORE:begin
-      glyph[8'd255-{bin_y,bin_x}]<=total!=0&&({2'b0,hits}<<2)>=total;
+      glyph[8'd255-{bin_y,bin_x}]<=bin_foreground;
+      if(bin_foreground) glyph_cells<=glyph_cells+1'b1;
+      glyph_strong[8'd255-{bin_y,bin_x}]<=total!=0&&({2'b0,hits_strong}<<2)>=total;
+      if(total!=0&&({2'b0,hits_strong}<<2)>=total) strong_cells<=strong_cells+1'b1;
       if(bin_x==15) begin
         bin_x<=0;if(bin_y==15) state<=MATCH_START;else begin bin_y<=bin_y+1'b1;state<=BIN_SETUP;end
       end else begin bin_x<=bin_x+1'b1;state<=BIN_SETUP;end
     end
     MATCH_START:begin match_start<=1;state<=MATCH_WAIT;end
     MATCH_WAIT:if(match_done) begin
-      if(recognized) begin
-        pending_objects[object_count*42+:42]<={matched_ascii,xmin,xmax,ymin,ymax};
-        pending_valid[object_count]<=1;object_count<=object_count+1'b1;
+      if(!match_phase) begin
+        strong_ok<=recognized;strong_ascii<=matched_ascii;match_phase<=1;state<=MATCH_START;
+      end else begin
+        // 两种采样均有高置信结果但类别不同则拒识，不以更松采样强行覆盖。
+        if(!nested&&free_index>=0&&(strong_ok||recognized)&&(!strong_ok||!recognized||strong_ascii==matched_ascii)) begin
+          pending_objects[free_index*42+:42]<={strong_ok?strong_ascii:matched_ascii,xmin,xmax,ymin,ymax};
+          pending_valid<=keep_valid|(4'b1<<free_index);
+        end
+        state<=CAND_ADV;
       end
-      state<=CAND_ADV;
     end
     CAND_ADV:begin
-      if(candidate_label==255||candidates>=MAX_CANDIDATES||pending_valid==4'b1111) state<=NEXT_POLARITY;
+      if(candidate_label==LABEL_COUNT-1||candidates>=MAX_CANDIDATES) state<=NEXT_POLARITY;
       else begin candidate_label<=candidate_label+1'b1;state<=CAND_ISS;end
     end
     NEXT_POLARITY:begin
-      if(polarity||pending_valid==4'b1111) state<=PUBLISH;
+      if(polarity) state<=PUBLISH;
       else begin polarity<=1;second_pass<=0;candidates<=0;next_label<=1;index<=0;x<=0;y<=0;left_label<=0;state<=RAW_ISS;end
     end
     PUBLISH:begin objects_o<=pending_objects;valid_o<=pending_valid;done_o<=1;busy_o<=0;cycles_o<=work_cycles;state<=IDLE;end

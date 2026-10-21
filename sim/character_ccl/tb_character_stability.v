@@ -4,26 +4,29 @@ module tb_character_stability;
  wire [167:0] objects;wire [3:0] valid;wire busy,overflow;wire [7:0] threshold;
  reg done=0,over=0;reg [167:0] raw_objects=0;reg [3:0] raw_valid=0;
  character_detection_top dut(clk,rst,vs,1'b0,8'd255,objects,valid,busy,overflow,threshold);
- task result;
- begin @(negedge clk);done=1;@(negedge clk);done=0;end
- endtask
- task boundary;
- begin @(negedge clk);vs=1;@(negedge clk);vs=0;end
- endtask
+ task result;begin @(negedge clk);done=1;@(negedge clk);done=0;repeat(60) @(negedge clk);end endtask
+ task boundary;begin @(negedge clk);vs=1;@(negedge clk);vs=0;end endtask
  integer i;
  initial begin
   force dut.done=done;force dut.raw_objects=raw_objects;force dut.raw_valid=raw_valid;
   force dut.contrast=1'b1;force dut.overflow_o=over;
   repeat(3) @(negedge clk);rst=1;
   raw_objects[41:0]={8'h41,9'd80,9'd120,8'd30,8'd80};raw_valid=1;
-  result();boundary();if(valid!=0) $fatal(1,"single confirmation");
+  result();boundary();if(valid!=0) $fatal(1,"one observation must not publish");
+  result();boundary();if(valid!=0) $fatal(1,"two observations must not publish");
   result();if(valid!=0) $fatal(1,"non-atomic update");
-  boundary();if(valid!=1) $fatal(1,"stable result absent");
-  raw_objects[41:34]="B";result();boundary();if(valid!=0) $fatal(1,"old label not cleared after change");
-  result();boundary();if(valid!=1) $fatal(1,"new stable label absent");
+  boundary();if(valid!=1) $fatal(1,"three confirmations absent");
+  // CCL result moves from slot 0 to slot 2: track must remain the same.
+  raw_objects[125:84]=raw_objects[41:0];raw_valid=4;
+  result();boundary();if(valid!=1||objects[41:34]!="A") $fatal(1,"slot permutation broke track");
+  raw_valid=0;result();boundary();if(valid!=1) $fatal(1,"single miss should hold");
+  result();boundary();if(valid!=0) $fatal(1,"second miss must clear");
+  raw_valid=4;result();result();result();boundary();if(valid!=1) $fatal(1,"reacquisition");
+  raw_objects[125:118]="B";result();boundary();if(valid!=0) $fatal(1,"changed class stale label");
+  result();result();boundary();if(valid!=1||objects[41:34]!="B") $fatal(1,"new class confirmation");
   over=1;result();boundary();if(valid!=0) $fatal(1,"overflow must reject");
-  over=0;result();result();boundary();if(valid!=1) $fatal(1,"recovery failed");
-  for(i=0;i<14;i=i+1) boundary();if(valid!=0) $fatal(1,"expired label");
-  $display("PASS two confirmations, frame-atomic update, changed-class clear, overflow rejection and stale timeout");$finish;
+  over=0;result();result();result();boundary();if(valid!=1) $fatal(1,"recovery failed");
+  for(i=0;i<26;i=i+1) boundary();if(valid!=0) $fatal(1,"expired label");
+  $display("PASS position association, slot permutation, three confirmations, one-miss hold, expiry and overflow");$finish;
  end
 endmodule

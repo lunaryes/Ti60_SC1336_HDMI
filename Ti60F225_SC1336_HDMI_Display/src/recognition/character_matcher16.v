@@ -1,123 +1,107 @@
 `timescale 1ns/1ps
-// One 16-bit popcount reused for 256-bit templates. The second score is
-// explicitly a DIFFERENT CLASS, not another font of the winning class.
-// 独立字符分类器：网格汉明距离 + 每行左右外轮廓偏差。
-// 原 ocr_matcher16 保持不变；新分类仍要求原始汉明距离不超过40。
+// 实心/描边双原型、对称一像素容差；次优类别不经接受门限预筛。
 module character_matcher16 #(
-    parameter [10:0] MAX_DISTANCE=11'd128, MIN_MARGIN=11'd10
+ parameter [10:0] MAX_DISTANCE=11'd128, MIN_MARGIN=11'd10
 )(
-    input wire clk,rst_n,start_i,candidate_valid_i,
-    input wire [255:0] glyph_i,
-    input wire [10:0] width_i,
-    input wire [9:0] height_i,
-    output reg result_valid_o,recognized_o,
-    output reg [5:0] class_id_o,
-    output reg [7:0] ascii_o,
-    output reg [8:0] best_distance_o,second_distance_o,
-    output reg [255:0] template_o
+ input wire clk,rst_n,start_i,candidate_valid_i,
+ input wire [255:0] glyph_i,input wire [10:0] width_i,input wire [9:0] height_i,
+ output reg result_valid_o,recognized_o,output reg [5:0] class_id_o,
+ output reg [7:0] ascii_o,output reg [8:0] best_distance_o,second_distance_o,
+ output reg [255:0] template_o
 );
-    localparam IDLE=0,SCAN=1,FINISH_TEMPLATE=2,FINISH_CLASS=3,DONE=4;
-    reg [2:0] state;
-    reg [8:0] address;
-    reg [3:0] word_index;
-    wire [255:0] rom_bitmap;
-    wire [5:0] rom_class;
-    wire [7:0] rom_ascii,rom_aspect;
-    ocr_font16_rom u_rom(.addr_i(address),.bitmap_o(rom_bitmap),.class_o(rom_class),
-                         .ascii_o(rom_ascii),.aspect_o(rom_aspect));
-    reg [255:0] glyph;
-    reg [10:0] width;
-    reg [9:0] height;
-    reg [8:0] hamming,intersection_count,union_count;
-    reg [10:0] distance,class_best,best,second;
-    reg [255:0] class_template,best_template;
-    reg [5:0] best_class;
-    reg [7:0] best_ascii;
-    wire [255:0] diff=glyph^rom_bitmap;
-    wire [255:0] both=glyph&rom_bitmap;
-    wire [255:0] either=glyph|rom_bitmap;
-    function [4:0] pop16;
-        input [15:0] value;
-        integer b;
-        begin pop16=0;for(b=0;b<16;b=b+1) pop16=pop16+value[b];end
-    endfunction
-    wire [18:0] aspect_observed={width,7'b0};
-    wire [18:0] aspect_reference=rom_aspect*height;
-    wire aspect_ok=(aspect_observed*3>=aspect_reference*2) &&
-                   (aspect_observed*2<=aspect_reference*3);
-    wire overlap_ok=({1'b0,intersection_count}<<1)>={1'b0,union_count};
-    function [4:0] leading;
-        input [15:0] v;integer b;reg found;
-        begin leading=16;found=0;for(b=15;b>=0;b=b-1) if(v[b]&&!found) begin leading=15-b;found=1;end end
-    endfunction
-    function [4:0] trailing;
-        input [15:0] v;integer b;reg found;
-        begin trailing=16;found=0;for(b=0;b<16;b=b+1) if(v[b]&&!found) begin trailing=b;found=1;end end
-    endfunction
-    wire [15:0] grow=glyph[word_index*16+:16],trow=rom_bitmap[word_index*16+:16];
-    wire [4:0] gl=leading(grow),gr=trailing(grow),tl=leading(trow),tr=trailing(trow);
-    wire [4:0] dl=gl>tl?gl-tl:tl-gl,dr=gr>tr?gr-tr:tr-gr;
-    wire [6:0] profile_cost=({2'b0,dl}+{2'b0,dr})<<1;
-    wire [10:0] template_distance=aspect_ok&&overlap_ok&&hamming<=40 ? distance:11'd1023;
-    always @(posedge clk or negedge rst_n) begin
-        if(!rst_n) begin
-            state<=IDLE;address<=0;word_index<=0;glyph<=0;width<=0;height<=0;
-            distance<=0;hamming<=0;intersection_count<=0;union_count<=0;
-            class_best<=1023;best<=1023;second<=1023;class_template<=0;best_template<=0;
-            best_class<=0;best_ascii<=0;template_o<=0;
-            result_valid_o<=0;recognized_o<=0;class_id_o<=0;ascii_o<="?";
-            best_distance_o<=256;second_distance_o<=256;
-        end else begin
-            result_valid_o<=0;
-            // start_i arrives on every completed frame. Invalid input cancels
-            // work/results, avoiding late old matches after a glyph disappears.
-            if(start_i) begin
-                recognized_o<=0;class_id_o<=0;ascii_o<="?";template_o<=0;
-                if(!candidate_valid_i) begin
-                    state<=IDLE;result_valid_o<=1;best_distance_o<=256;second_distance_o<=256;
-                end else begin
-                    glyph<=glyph_i;width<=width_i;height<=height_i;
-                    address<=0;word_index<=0;distance<=0;hamming<=0;intersection_count<=0;union_count<=0;
-                    class_best<=1023;best<=1023;second<=1023;state<=SCAN;
-                end
-            end else case(state)
-                SCAN: begin
-                    distance<=distance+pop16(diff[word_index*16 +: 16])+profile_cost;
-                    hamming<=hamming+pop16(diff[word_index*16 +: 16]);
-                    intersection_count<=intersection_count+pop16(both[word_index*16 +: 16]);
-                    union_count<=union_count+pop16(either[word_index*16 +: 16]);
-                    if(word_index==15) state<=FINISH_TEMPLATE;else word_index<=word_index+1'b1;
-                end
-                FINISH_TEMPLATE: begin
-                    if(template_distance<class_best) begin
-                        class_best<=template_distance;class_template<=rom_bitmap;
-                    end
-                    if(address[2:0]==7) state<=FINISH_CLASS;
-                    else begin
-                        address<=address+1'b1;word_index<=0;distance<=0;hamming<=0;
-                        intersection_count<=0;union_count<=0;state<=SCAN;
-                    end
-                end
-                FINISH_CLASS: begin
-                    if(class_best<best) begin
-                        second<=best;best<=class_best;best_class<=rom_class;
-                        best_ascii<=rom_ascii;best_template<=class_template;
-                    end else if(class_best<second) second<=class_best;
-                    if(address==287) state<=DONE;
-                    else begin
-                        address<=address+1'b1;word_index<=0;distance<=0;hamming<=0;
-                        intersection_count<=0;union_count<=0;class_best<=1023;state<=SCAN;
-                    end
-                end
-                DONE: begin
-                    result_valid_o<=1;best_distance_o<=best>511?511:best;second_distance_o<=second>511?511:second;
-                    recognized_o<=best<=MAX_DISTANCE && second-best>=MIN_MARGIN;
-                    class_id_o<=(best<=MAX_DISTANCE && second-best>=MIN_MARGIN)?best_class:0;
-                    ascii_o<=(best<=MAX_DISTANCE && second-best>=MIN_MARGIN)?best_ascii:"?";
-                    template_o<=best_template;state<=IDLE;
-                end
-                default: state<=IDLE;
-            endcase
-        end
+ localparam IDLE=0,SCAN=1,TEMPLATE=2,CLASS=3,DONE=4;
+ reg [2:0] state;reg [9:0] address;reg [3:0] row;reg outline;
+ wire [255:0] bitmap;wire [5:0] rom_class;wire [7:0] rom_ascii,aspect;
+ character_font16_rom rom(address,bitmap,rom_class,rom_ascii,aspect);
+ reg [255:0] glyph;reg [10:0] width;reg [9:0] height;
+ reg [10:0] distance,class_best,best,second;
+ reg [8:0] unmatched,raw_error,class_unmatched,class_error,best_unmatched,best_error;
+ reg [7:0] best_ascii;reg [5:0] best_class;
+ reg [255:0] class_template,best_template;
+ function [4:0] pop16;input [15:0] v;integer k;
+ begin pop16=0;for(k=0;k<16;k=k+1) pop16=pop16+v[k];end endfunction
+ function [4:0] leading;input [15:0] v;integer k;reg found;
+ begin leading=16;found=0;for(k=15;k>=0;k=k-1) if(v[k]&&!found) begin leading=15-k;found=1;end end endfunction
+ function [4:0] trailing;input [15:0] v;integer k;reg found;
+ begin trailing=16;found=0;for(k=0;k<16;k=k+1) if(v[k]&&!found) begin trailing=k;found=1;end end endfunction
+ function [15:0] getrow;input [255:0] v;input integer r;
+ begin getrow=(r<0||r>15)?16'd0:v[(15-r)*16+:16];end endfunction
+ function [15:0] prototype;input [255:0] v;input integer r;input edge_mode;
+ reg [15:0] c;
+ begin c=getrow(v,r);prototype=edge_mode ?
+ c & ~(getrow(v,r-1)&getrow(v,r+1)&(c<<1)&(c>>1)):c;end endfunction
+ wire [15:0] g=getrow(glyph,{28'd0,row});
+ wire [15:0] t=prototype(bitmap,{28'd0,row},outline);
+ wire [15:0] gn=g|getrow(glyph,{28'd0,row}-1)|getrow(glyph,{28'd0,row}+1);
+ wire [15:0] tn=t|prototype(bitmap,{28'd0,row}-1,outline)|prototype(bitmap,{28'd0,row}+1,outline);
+ wire [5:0] missed={1'b0,pop16(g&~(tn|(tn<<1)|(tn>>1)))}+
+                         {1'b0,pop16(t&~(gn|(gn<<1)|(gn>>1)))};
+ wire [4:0] error=pop16(g^t);
+ wire [4:0] gl=leading(g),tl=leading(t),gr=trailing(g),tr=trailing(t);
+ wire [5:0] profile=(gl>tl?gl-tl:tl-gl)+(gr>tr?gr-tr:tr-gr);
+ wire [18:0] observed={width,7'd0},reference=aspect*height;
+ wire aspect_ok=observed*3>=reference*2 && observed*2<=reference*3;
+ wire [10:0] score=aspect_ok?distance:11'd1023;
+ // 近乎精确的字模允许较小的绝对差；较差的匹配仍保持严格类别间隔。
+ wire margin_ok=second>=best+MIN_MARGIN ||
+                (best<=32 && best_unmatched<=3 && second>=best+6);
+ // 0/O 必须保留中心孔洞；实心圆/椭圆不能仅凭外轮廓相似而成为数字0。
+ wire hole_ok=(best_ascii!="0"&&best_ascii!="O") ||
+              pop16({glyph[150+:4],glyph[134+:4],glyph[118+:4],glyph[102+:4]})<12;
+ wire accept=best<=MAX_DISTANCE && best_unmatched<=12 && best_error<=80 && margin_ok && best_ascii!="a" && hole_ok;
+ always @(posedge clk or negedge rst_n) begin
+  if(!rst_n) begin
+   state<=IDLE;address<=0;row<=0;outline<=0;glyph<=0;width<=0;height<=0;
+   distance<=0;unmatched<=0;raw_error<=0;class_best<=1023;best<=1023;second<=1023;
+   class_unmatched<=511;class_error<=511;best_unmatched<=511;best_error<=511;
+   best_ascii<=0;best_class<=0;class_template<=0;best_template<=0;
+   result_valid_o<=0;recognized_o<=0;class_id_o<=0;ascii_o<="?";
+   best_distance_o<=511;second_distance_o<=511;template_o<=0;
+  end else begin
+   result_valid_o<=0;
+   if(start_i) begin
+    recognized_o<=0;class_id_o<=0;ascii_o<="?";template_o<=0;
+    best_distance_o<=511;second_distance_o<=511;
+    if(!candidate_valid_i) begin state<=IDLE;result_valid_o<=1;end
+    else begin
+     glyph<=glyph_i;width<=width_i;height<=height_i;address<=0;row<=0;outline<=0;
+     distance<=0;unmatched<=0;raw_error<=0;class_best<=1023;best<=1023;second<=1023;state<=SCAN;
     end
+   end else case(state)
+    SCAN:begin
+     distance<=distance+error+profile+({5'd0,missed}<<2);
+     unmatched<=unmatched+missed;raw_error<=raw_error+error;
+     if(row==15) state<=TEMPLATE;else row<=row+1'b1;
+    end
+    TEMPLATE:begin
+     if(score<class_best) begin
+      class_best<=score;class_unmatched<=unmatched;class_error<=raw_error;class_template<=bitmap;
+     end
+     row<=0;distance<=0;unmatched<=0;raw_error<=0;
+     if(!outline) begin outline<=1;state<=SCAN;end
+     else begin
+      outline<=0;
+      if(address[3:0]==15) state<=CLASS;
+      else begin address<=address+1'b1;state<=SCAN;end
+     end
+    end
+    CLASS:begin
+     if(class_best<best) begin
+      second<=best;best<=class_best;best_ascii<=rom_ascii;best_class<=rom_class;
+      best_template<=class_template;best_unmatched<=class_unmatched;best_error<=class_error;
+     end else if(class_best<second) second<=class_best;
+     class_best<=1023;
+     if(address==591) state<=DONE;
+     else begin address<=address+1'b1;state<=SCAN;end
+    end
+    DONE:begin
+     result_valid_o<=1;recognized_o<=accept;
+     class_id_o<=accept?best_class:0;ascii_o<=accept?best_ascii:"?";
+     best_distance_o<=best>511?511:best;second_distance_o<=second>511?511:second;
+     template_o<=best_template;state<=IDLE;
+    end
+    default:state<=IDLE;
+   endcase
+  end
+ end
 endmodule

@@ -1306,35 +1306,22 @@ wire [7:0]  ocr_threshold;
 wire        ocr_dark_on_light;
 wire [3:0]  ocr_reject_reason;
 
-simple_shape_ocr #(
-    .IMG_W         (1280),
-    .ROI_X0        (320),
-    .ROI_Y0        (120),
-    .ROI_W         (640),
-    .ROI_H         (480)
-) u_simple_shape_ocr (
-    .clk               (clk_pixel),
-    .rst_n             (rstn_pixel),
-    .vsync_i           (hist_vs),
-    .de_i              (hist_de),
-    .gray_i            (hist_y),
-    .result_valid_o    (ocr_result_valid),
-    .recognized_o      (ocr_recognized),
-    .class_id_o        (ocr_class_id),
-    .ascii_o           (ocr_ascii),
-    .best_distance_o   (ocr_best_distance),
-    .second_distance_o (ocr_second_distance),
-    .glyph_o           (ocr_glyph),
-    .template_o        (ocr_template),
-    .bbox_valid_o      (ocr_bbox_valid),
-    .bbox_xmin_o       (ocr_bbox_xmin),
-    .bbox_xmax_o       (ocr_bbox_xmax),
-    .bbox_ymin_o       (ocr_bbox_ymin),
-    .bbox_ymax_o       (ocr_bbox_ymax),
-    .threshold_o       (ocr_threshold),
-    .dark_on_light_o   (ocr_dark_on_light),
-    .reject_reason_o   (ocr_reject_reason)
-);
+// 统一使用独立连通域字符识别；旧固定 ROI 模块源码保留用于历史回归，
+// 不再并行输出另一套互相矛盾的分类，也释放采样阵列资源给字符模板。
+assign ocr_result_valid=1'b0;
+assign ocr_recognized=1'b0;
+assign ocr_class_id=0;
+assign ocr_ascii=0;
+assign ocr_best_distance=511;
+assign ocr_second_distance=511;
+assign ocr_glyph=0;
+assign ocr_template=0;
+assign ocr_bbox_valid=0;
+assign ocr_bbox_xmin=0;
+assign ocr_bbox_xmax=0;
+assign ocr_bbox_ymin=0;
+assign ocr_bbox_ymax=0;
+assign ocr_dark_on_light=1;
 
 // Generate coordinates from the final pipeline stream, so the overlay is
 // pixel-aligned even though recognition samples an earlier grayscale tap.
@@ -1345,24 +1332,36 @@ wire [23:0] pipe_rgb_detect;
 wire [23:0] pipe_rgb_all_detect;
 wire [167:0] character_objects;
 wire [3:0] character_valid;
+wire character_overflow;
+assign ocr_reject_reason={3'b0,character_overflow};
 character_detection_top u_character_detection (
     .clk(clk_pixel),.rst_n(rstn_pixel),.vsync_i(hist_vs),.de_i(hist_de),.gray_i(hist_y),
-    .objects_o(character_objects),.valid_o(character_valid),.busy_o(),.overflow_o(),.threshold_o()
+    .objects_o(character_objects),.valid_o(character_valid),.busy_o(),.overflow_o(character_overflow),.threshold_o(ocr_threshold)
 );
 character_overlay_cn u_character_overlay (
+    .clk(clk_pixel),.rst_n(rstn_pixel),
     .x_i(overlay_x),.y_i(overlay_y),.de_i(pipe_de),.enable_i(ocr_overlay_enable),
     .rgb_i(pipe_rgb_detect),.objects_i(character_objects),.valid_i(character_valid),
     .legacy_recognized_i(ocr_recognized),.legacy_class_i(ocr_class_id),.rgb_o(pipe_rgb_all_detect)
 );
 wire [143:0] geometry_objects;
 wire [3:0] geometry_valid;
+wire [3:0] fused_geometry_comb;
+reg [3:0] fused_geometry_valid;
+always @(posedge clk_pixel or negedge rstn_pixel)
+    if(!rstn_pixel) fused_geometry_valid<=0;else fused_geometry_valid<=fused_geometry_comb;
+recognition_object_fusion u_object_fusion (
+    .geometry_objects_i(geometry_objects),.geometry_valid_i(geometry_valid),
+    .characters_i(character_objects),.character_valid_i(character_valid),
+    .geometry_valid_o(fused_geometry_comb)
+);
 shape_geometry_top u_geometry (
     .clk(clk_pixel),.rst_n(rstn_pixel),.vsync_i(shape_vs),.de_i(shape_de),.edge_i(shape_edge),
     .objects_o(geometry_objects),.valid_o(geometry_valid),.busy_o(),.rejected_o(),.cycles_o()
 );
 shape_geometry_overlay u_geometry_overlay (
     .x_i(overlay_x),.y_i(overlay_y),.de_i(pipe_de),.enable_i(ocr_overlay_enable),
-    .rgb_i(pipe_rgb_ocr),.objects_i(geometry_objects),.valid_i(geometry_valid),.rgb_o(pipe_rgb_detect)
+    .rgb_i(pipe_rgb_ocr),.objects_i(geometry_objects),.valid_i(fused_geometry_valid),.rgb_o(pipe_rgb_detect)
 );
 
 video_xy_counter #(.IMG_W(1280)) u_overlay_xy (
@@ -1375,6 +1374,7 @@ video_xy_counter #(.IMG_W(1280)) u_overlay_xy (
 );
 
 recognition_overlay #(
+    .SHOW_LEGACY (0),
     .ROI_X0 (320),
     .ROI_Y0 (120),
     .ROI_W  (640),

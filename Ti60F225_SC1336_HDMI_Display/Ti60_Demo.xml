@@ -63,6 +63,8 @@
         <efx:design_file name="src/recognition/character_frame_capture.v" version="default" library="default" />
         <efx:design_file name="src/recognition/character_ccl_engine.v" version="default" library="default" />
         <efx:design_file name="src/recognition/character_matcher16.v" version="default" library="default" />
+        <efx:design_file name="src/recognition/character_font16_rom.v" version="default" library="default" />
+        <efx:design_file name="src/recognition/recognition_object_fusion.v" version="default" library="default" />
         <efx:design_file name="src/recognition/character_detection_top.v" version="default" library="default" />
         <efx:design_file name="src/recognition/character_overlay_cn.v" version="default" library="default" />
         <efx:design_file name="src/recognition/vision_cn_font.v" version="default" library="default" />
