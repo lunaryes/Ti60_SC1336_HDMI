@@ -55,6 +55,11 @@
         <efx:design_file name="src/recognition/simple_shape_ocr.v" version="default" library="default" />
         <efx:design_file name="src/recognition/video_xy_counter.v" version="default" library="default" />
         <efx:design_file name="src/recognition/recognition_overlay.v" version="default" library="default" />
+        <efx:design_file name="src/recognition/shape_sdp_ram.v" version="default" library="default" />
+        <efx:design_file name="src/recognition/shape_frame_capture.v" version="default" library="default" />
+        <efx:design_file name="src/recognition/shape_geometry_engine.v" version="default" library="default" />
+        <efx:design_file name="src/recognition/shape_geometry_top.v" version="default" library="default" />
+        <efx:design_file name="src/recognition/shape_geometry_overlay.v" version="default" library="default" />
         <efx:top_vhdl_arch name="" />
         <efx:msg_config name="" />
         <efx:partition_definitions name="" />

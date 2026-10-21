@@ -93,7 +93,10 @@ module image_pipeline_top #(
     // 不接直方图时可以悬空；不影响延迟和原有输出。
     output wire [7:0]  dbg_y_o,
     output wire        dbg_de_o,
-    output wire        dbg_vs_o
+    output wire        dbg_vs_o,
+    output wire        dbg_edge_o,
+    output wire        dbg_edge_de_o,
+    output wire        dbg_edge_vs_o
 );
 
     localparam CANNY_LAT = 12;
@@ -228,6 +231,9 @@ module image_pipeline_top #(
     wire [7:0]  can_mag8;             // 真实阈值域 mag8（未饱和），调试用
     wire [1:0]  can_cls;              // 判决分类：00/01/10/11，调试用
     wire        can_edge;
+    assign dbg_edge_o=can_edge;
+    assign dbg_edge_de_o=can_de;
+    assign dbg_edge_vs_o=can_vs;
 
     // 单一阈值口 → 双阈值（2:1），见文件头的【thr_i】
     wire [7:0]  thr_high = thr_i;

@@ -1257,6 +1257,7 @@ canny_threshold_key_ctrl #(
     .key_press_o       (               )     // 单拍按下脉冲：只在板上用 ILA 才看得到
 );
 
+wire shape_edge,shape_de,shape_vs;
 image_pipeline_top #(.IMG_W(1280),.IMG_H(720),.LATENCY(IMG_LAT)) u_image_pipeline(
     .clk_i                             (clk_pixel                 ),
     .rst_ni                            (rstn_pixel                ),
@@ -1276,7 +1277,10 @@ image_pipeline_top #(.IMG_W(1280),.IMG_H(720),.LATENCY(IMG_LAT)) u_image_pipelin
     // M6 调试抽头：中值后、Canny 实际看到的 Y/de/vs（不增加逻辑）
     .dbg_y_o                           (hist_y                    ),
     .dbg_de_o                          (hist_de                   ),
-    .dbg_vs_o                          (hist_vs                   )
+    .dbg_vs_o                          (hist_vs                   ),
+    .dbg_edge_o                        (shape_edge),
+    .dbg_edge_de_o                     (shape_de),
+    .dbg_edge_vs_o                     (shape_vs)
 );
 
 //---------------------------------------------------------------------
@@ -1337,6 +1341,17 @@ simple_shape_ocr #(
 wire [10:0] overlay_x;
 wire [9:0]  overlay_y;
 wire [23:0] pipe_rgb_ocr;
+wire [23:0] pipe_rgb_detect;
+wire [143:0] geometry_objects;
+wire [3:0] geometry_valid;
+shape_geometry_top u_geometry (
+    .clk(clk_pixel),.rst_n(rstn_pixel),.vsync_i(shape_vs),.de_i(shape_de),.edge_i(shape_edge),
+    .objects_o(geometry_objects),.valid_o(geometry_valid),.busy_o(),.rejected_o(),.cycles_o()
+);
+shape_geometry_overlay u_geometry_overlay (
+    .x_i(overlay_x),.y_i(overlay_y),.de_i(pipe_de),.enable_i(ocr_overlay_enable),
+    .rgb_i(pipe_rgb_ocr),.objects_i(geometry_objects),.valid_i(geometry_valid),.rgb_o(pipe_rgb_detect)
+);
 
 video_xy_counter #(.IMG_W(1280)) u_overlay_xy (
     .clk     (clk_pixel),
@@ -1427,7 +1442,7 @@ FrameBoundCrop #(.SKIP_ROWS(2),.SKIP_COLS(2),.TOTAL_ROWS(720),.TOTAL_COLS(1280))
     .vs_i                              (pipe_vs                   ),
     .hs_i                              (pipe_hs                   ),
     .de_i                              (pipe_de                   ),
-    .data_i                            (pipe_rgb_ocr              ),
+    .data_i                            (pipe_rgb_detect           ),
 
     .vs_o                              (boundcrop_vs              ),
     .hs_o                              (boundcrop_hs              ),
