@@ -46,6 +46,10 @@
         <efx:design_file name="src/common/gray_hist_uart.v" version="default" library="default" />
         <efx:design_file name="src/control/canny_threshold_key_ctrl.v" version="default" library="default" />
         <efx:design_file name="src/recognition/fixed_roi_glyph_sampler.v" version="default" library="default" />
+        <efx:design_file name="src/recognition/adaptive_roi_glyph_sampler.v" version="default" library="default" />
+        <efx:design_file name="src/recognition/ocr_sampler16.v" version="default" library="default" />
+        <efx:design_file name="src/recognition/ocr_matcher16.v" version="default" library="default" />
+        <efx:design_file name="src/recognition/ocr_font16_rom.v" version="default" library="default" />
         <efx:design_file name="src/recognition/symbol_template_rom.v" version="default" library="default" />
         <efx:design_file name="src/recognition/symbol_template_matcher.v" version="default" library="default" />
         <efx:design_file name="src/recognition/simple_shape_ocr.v" version="default" library="default" />

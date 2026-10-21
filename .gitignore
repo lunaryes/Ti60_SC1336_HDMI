@@ -93,3 +93,6 @@ Thumbs.db
 desktop.ini
 
 .lock
+
+# Reproducible OCR camera fixtures and simulation executables
+sim/build_ocr/

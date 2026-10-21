@@ -1155,6 +1155,7 @@ wire                   [   1:0]         r_img_mode                 ;
 wire                   [   1:0]         r_img_view                 ;
 wire                   [   1:0]         r_smooth_mode              ;   // uart_cmd 'S' 寄存器
 wire                                    r_smooth_valid             ;   // 同拍单脉冲
+wire                                    ocr_overlay_enable         ;   // UART 'O': annotation A/B
 wire                   [   1:0]         w_smooth_mode              ;   // 实际生效（按键也会改）
 
 //---------------------------------------------------------------------
@@ -1219,6 +1220,7 @@ uart_cmd #(
 
     .gain_r_o (r_awb_gain              ),   // AWB R 增益（1/64 定点，复位 112 = ×1.75）
     .gain_b_o (b_awb_gain              ),   // AWB B 增益（复位 96 = ×1.50）
+    .ocr_enable_o(ocr_overlay_enable   ),
 
     .hist_req_o (hist_req              ),   // 'H' → 直方图模块
     .tx_busy_o  (cmd_tx_busy           )    // 直方图发流前避让在途回包
@@ -1278,45 +1280,56 @@ image_pipeline_top #(.IMG_W(1280),.IMG_H(720),.LATENCY(IMG_LAT)) u_image_pipelin
 );
 
 //---------------------------------------------------------------------
-// Fixed-ROI digit / uppercase-letter recognition (36 classes).
+// Single printed digit / uppercase-letter recognition (36 classes, V3).
 // The recognizer sees the median-filtered grayscale stream rather than
 // the selected Canny display view. This keeps recognition independent of
 // VIEW/MODE and interprets dark ink on a light card as foreground.
 //---------------------------------------------------------------------
-localparam [7:0] OCR_BIN_THR = 8'd96;
-wire [10:0] ocr_unused_x;
-wire [9:0]  ocr_unused_y;
 wire        ocr_result_valid;
 wire        ocr_recognized;
 wire [5:0]  ocr_class_id;
 wire [7:0]  ocr_ascii;
-wire [6:0]  ocr_best_distance;
-wire [6:0]  ocr_second_distance;
+wire [8:0]  ocr_best_distance;
+wire [8:0]  ocr_second_distance;
+wire [255:0] ocr_glyph;
+wire [255:0] ocr_template;
+wire        ocr_bbox_valid;
+wire [10:0] ocr_bbox_xmin;
+wire [10:0] ocr_bbox_xmax;
+wire [9:0]  ocr_bbox_ymin;
+wire [9:0]  ocr_bbox_ymax;
+wire [7:0]  ocr_threshold;
+wire        ocr_dark_on_light;
+wire [3:0]  ocr_reject_reason;
 
 simple_shape_ocr #(
     .IMG_W         (1280),
-    .ROI_X0        (576),
-    .ROI_Y0        (296),
-    .ROI_W         (128),
-    .ROI_H         (128),
-    .CELL_HITS_MIN (4),
-    .MAX_DISTANCE  (7'd12),
-    .MIN_MARGIN    (7'd2),
-    .LAST_TEMPLATE (6'd35)
+    .ROI_X0        (320),
+    .ROI_Y0        (120),
+    .ROI_W         (640),
+    .ROI_H         (480)
 ) u_simple_shape_ocr (
     .clk               (clk_pixel),
     .rst_n             (rstn_pixel),
     .vsync_i           (hist_vs),
     .de_i              (hist_de),
-    .foreground_i      (hist_y < OCR_BIN_THR),
-    .x_o               (ocr_unused_x),
-    .y_o               (ocr_unused_y),
+    .gray_i            (hist_y),
     .result_valid_o    (ocr_result_valid),
     .recognized_o      (ocr_recognized),
     .class_id_o        (ocr_class_id),
     .ascii_o           (ocr_ascii),
     .best_distance_o   (ocr_best_distance),
-    .second_distance_o (ocr_second_distance)
+    .second_distance_o (ocr_second_distance),
+    .glyph_o           (ocr_glyph),
+    .template_o        (ocr_template),
+    .bbox_valid_o      (ocr_bbox_valid),
+    .bbox_xmin_o       (ocr_bbox_xmin),
+    .bbox_xmax_o       (ocr_bbox_xmax),
+    .bbox_ymin_o       (ocr_bbox_ymin),
+    .bbox_ymax_o       (ocr_bbox_ymax),
+    .threshold_o       (ocr_threshold),
+    .dark_on_light_o   (ocr_dark_on_light),
+    .reject_reason_o   (ocr_reject_reason)
 );
 
 // Generate coordinates from the final pipeline stream, so the overlay is
@@ -1335,10 +1348,10 @@ video_xy_counter #(.IMG_W(1280)) u_overlay_xy (
 );
 
 recognition_overlay #(
-    .ROI_X0 (576),
-    .ROI_Y0 (296),
-    .ROI_W  (128),
-    .ROI_H  (128),
+    .ROI_X0 (320),
+    .ROI_Y0 (120),
+    .ROI_W  (640),
+    .ROI_H  (480),
     .TEXT_X (24),
     .TEXT_Y (24),
     .SCALE  (4)
@@ -1346,10 +1359,22 @@ recognition_overlay #(
     .x_i               (overlay_x),
     .y_i               (overlay_y),
     .de_i              (pipe_de),
+    .enable_i          (ocr_overlay_enable),
     .rgb_i             (pipe_rgb),
     .recognized_i      (ocr_recognized),
     .class_id_i        (ocr_class_id),
     .best_distance_i   (ocr_best_distance),
+    .glyph_i           (ocr_glyph),
+    .template_i        (ocr_template),
+    .bbox_valid_i      (ocr_bbox_valid),
+    .bbox_xmin_i       (ocr_bbox_xmin),
+    .bbox_xmax_i       (ocr_bbox_xmax),
+    .bbox_ymin_i       (ocr_bbox_ymin),
+    .bbox_ymax_i       (ocr_bbox_ymax),
+    .canny_threshold_i (w_img_thr),
+    .canny_smooth_i    (w_smooth_mode),
+    .ocr_threshold_i   (ocr_threshold),
+    .reject_reason_i   (ocr_reject_reason),
     .rgb_o             (pipe_rgb_ocr)
 );
 

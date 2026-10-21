@@ -2,6 +2,11 @@
 
 易灵思 Titanium Ti60F225 + SC1336 摄像头 + HDMI 1280×720 实时边缘检测。
 
+本分支加入单印刷字符OCR V3：640×480搜索区、16×16特征、多字体匹配、无效帧清除。
+使用范围和诊断见 [OCR V3说明](docs/OCR_V3_CAMERA.md)，
+Canny基线/像素保真验证见 [回归记录](docs/CANNY_BASELINE_AUDIT.md)。
+UART `4F 00`/`4F 01` 可立即关闭/开启识别标注，便于对比同一画面的Canny边缘。
+
 ---
 
 ## 1. 仓库布局

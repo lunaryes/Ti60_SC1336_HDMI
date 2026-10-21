@@ -99,6 +99,8 @@ module uart_cmd #(
     // 所以"不插串口"和"插了不用"两种情况下画面与改动前逐像素一致。
     output reg  [7:0] gain_r_o,
     output reg  [7:0] gain_b_o,
+    // OCR annotation A/B switch. The Canny pipeline is never gated.
+    output reg        ocr_enable_o,
 
     // M6 增量端口（只增不改）：直方图请求与 TX 忙标志
     output reg        hist_req_o,   // 收到 'H' 的单拍脉冲
@@ -186,7 +188,8 @@ module uart_cmd #(
     // 2) 命令解析：2 字节帧，未知字符直接丢
     //-----------------------------------------------------------------
     localparam [7:0] C_T = 8'h54, C_V = 8'h56, C_M = 8'h4D, C_R = 8'h52,
-                     C_A = 8'h41, C_B = 8'h42, C_H = 8'h48, C_S = 8'h53;
+                     C_A = 8'h41, C_B = 8'h42, C_H = 8'h48, C_S = 8'h53,
+                     C_O = 8'h4F;
 
     reg       p_wait;                 // 正在等参数字节
     reg [7:0] p_cmd;
@@ -203,6 +206,7 @@ module uart_cmd #(
             smooth_valid_o <= 1'b0;
             gain_r_o <= GAIN_R_DEF;
             gain_b_o <= GAIN_B_DEF;
+            ocr_enable_o <= 1'b1;
             p_wait     <= 1'b0;
             p_cmd      <= 8'd0;
             tx_req     <= 1'b0;
@@ -215,7 +219,7 @@ module uart_cmd #(
             if (rx_valid) begin
                 if (!p_wait) begin
                     case (rx_byte)
-                        C_T, C_V, C_M, C_A, C_B, C_S: begin
+                        C_T, C_V, C_M, C_A, C_B, C_S, C_O: begin
                             p_cmd  <= rx_byte;
                             p_wait <= 1'b1;
                         end
@@ -250,6 +254,7 @@ module uart_cmd #(
                         end
                         C_A:     gain_r_o <= rx_byte;
                         C_B:     gain_b_o <= rx_byte;
+                        C_O:     ocr_enable_o <= rx_byte[0];
                         default: ;
                     endcase
                     p_wait <= 1'b0;
