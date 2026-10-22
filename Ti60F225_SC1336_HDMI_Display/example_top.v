@@ -1382,127 +1382,27 @@ image_pipeline_top #(.IMG_W(1280),.IMG_H(720),.LATENCY(IMG_LAT),
 );
 
 //---------------------------------------------------------------------
-// Single printed digit / uppercase-letter recognition (36 classes, V3).
-// The recognizer sees the median-filtered grayscale stream rather than
-// the selected Canny display view. This keeps recognition independent of
-// VIEW/MODE and interprets dark ink on a light card as foreground.
+// Shape-only recognition profile. Character RTL is retained in src/recognition
+// for future integration; the active project excludes its detection chain.
+// Coordinates follow the final pipeline stream. Annotations are combinational
+// and do not change video timing or the DDR/IIR path.
 //---------------------------------------------------------------------
-wire        ocr_result_valid;
-wire        ocr_recognized;
-wire [5:0]  ocr_class_id;
-wire [7:0]  ocr_ascii;
-wire [8:0]  ocr_best_distance;
-wire [8:0]  ocr_second_distance;
-wire [255:0] ocr_glyph;
-wire [255:0] ocr_template;
-wire        ocr_bbox_valid;
-wire [10:0] ocr_bbox_xmin;
-wire [10:0] ocr_bbox_xmax;
-wire [9:0]  ocr_bbox_ymin;
-wire [9:0]  ocr_bbox_ymax;
-wire [7:0]  ocr_threshold;
-wire        ocr_dark_on_light;
-wire [3:0]  ocr_reject_reason;
-
-// 统一使用独立连通域字符识别；旧固定 ROI 模块源码保留用于历史回归，
-// 不再并行输出另一套互相矛盾的分类，也释放采样阵列资源给字符模板。
-assign ocr_result_valid=1'b0;
-assign ocr_recognized=1'b0;
-assign ocr_class_id=0;
-assign ocr_ascii=0;
-assign ocr_best_distance=511;
-assign ocr_second_distance=511;
-assign ocr_glyph=0;
-assign ocr_template=0;
-assign ocr_bbox_valid=0;
-assign ocr_bbox_xmin=0;
-assign ocr_bbox_xmax=0;
-assign ocr_bbox_ymin=0;
-assign ocr_bbox_ymax=0;
-assign ocr_dark_on_light=1;
-
-// Generate coordinates from the final pipeline stream, so the overlay is
-// pixel-aligned even though recognition samples an earlier grayscale tap.
 wire [10:0] overlay_x;
-wire [9:0]  overlay_y;
-wire [23:0] pipe_rgb_ocr;
+wire [9:0] overlay_y;
 wire [23:0] pipe_rgb_detect;
-wire [23:0] pipe_rgb_all_detect;
-wire [503:0] character_objects;
-wire [11:0] character_valid;
-wire character_overflow;
-wire [3:0] character_diagnostic;
-assign ocr_reject_reason=character_diagnostic;
-character_detection_top #(.MAX_OBJECTS(12)) u_character_detection (
-    .clk(clk_pixel),.rst_n(rstn_pixel),.vsync_i(median_vs),.de_i(median_de),.gray_i(median_y),
-    .objects_o(character_objects),.valid_o(character_valid),.busy_o(),.overflow_o(character_overflow),.threshold_o(ocr_threshold),.diagnostic_o(character_diagnostic)
-);
-character_overlay_cn #(.MAX_OBJECTS(12)) u_character_overlay (
-    .clk(clk_pixel),.rst_n(rstn_pixel),
-    .x_i(overlay_x),.y_i(overlay_y),.de_i(pipe_de),.enable_i(ocr_overlay_enable),
-    .rgb_i(pipe_rgb_detect),.objects_i(character_objects),.valid_i(character_valid),
-    .legacy_recognized_i(ocr_recognized),.legacy_class_i(ocr_class_id),.rgb_o(pipe_rgb_all_detect)
-);
 wire [287:0] geometry_objects;
 wire [7:0] geometry_valid;
-wire [7:0] fused_geometry_comb;
-reg [7:0] fused_geometry_valid;
-always @(posedge clk_pixel or negedge rstn_pixel)
-    if(!rstn_pixel) fused_geometry_valid<=0;else fused_geometry_valid<=fused_geometry_comb;
-recognition_object_fusion #(.GC(8),.CC(12)) u_object_fusion (
-    .clk(clk_pixel),.rst_n(rstn_pixel),
-    .geometry_objects_i(geometry_objects),.geometry_valid_i(geometry_valid),
-    .characters_i(character_objects),.character_valid_i(character_valid),
-    .geometry_valid_o(fused_geometry_comb)
-);
 shape_geometry_top u_geometry (
     .clk(clk_pixel),.rst_n(rstn_pixel),.vsync_i(shape_vs),.de_i(shape_de),.edge_i(shape_edge),
     .objects_o(geometry_objects),.valid_o(geometry_valid),.busy_o(),.rejected_o(),.cycles_o()
 );
 shape_geometry_overlay u_geometry_overlay (
     .x_i(overlay_x),.y_i(overlay_y),.de_i(pipe_de),.enable_i(ocr_overlay_enable),
-    .rgb_i(pipe_rgb_ocr),.objects_i(geometry_objects),.valid_i(fused_geometry_valid),.rgb_o(pipe_rgb_detect)
+    .rgb_i(pipe_rgb),.objects_i(geometry_objects),.valid_i(geometry_valid),.rgb_o(pipe_rgb_detect)
 );
-
 video_xy_counter #(.IMG_W(1280)) u_overlay_xy (
-    .clk     (clk_pixel),
-    .rst_n   (rstn_pixel),
-    .vsync_i (pipe_vs),
-    .de_i    (pipe_de),
-    .x_o     (overlay_x),
-    .y_o     (overlay_y)
-);
-
-recognition_overlay #(
-    .SHOW_LEGACY (0),
-    .ROI_X0 (320),
-    .ROI_Y0 (120),
-    .ROI_W  (640),
-    .ROI_H  (480),
-    .TEXT_X (24),
-    .TEXT_Y (24),
-    .SCALE  (4)
-) u_recognition_overlay (
-    .x_i               (overlay_x),
-    .y_i               (overlay_y),
-    .de_i              (pipe_de),
-    .enable_i          (ocr_overlay_enable),
-    .rgb_i             (pipe_rgb),
-    .recognized_i      (ocr_recognized),
-    .class_id_i        (ocr_class_id),
-    .best_distance_i   (ocr_best_distance),
-    .glyph_i           (ocr_glyph),
-    .template_i        (ocr_template),
-    .bbox_valid_i      (ocr_bbox_valid),
-    .bbox_xmin_i       (ocr_bbox_xmin),
-    .bbox_xmax_i       (ocr_bbox_xmax),
-    .bbox_ymin_i       (ocr_bbox_ymin),
-    .bbox_ymax_i       (ocr_bbox_ymax),
-    .canny_threshold_i (w_img_thr),
-    .canny_smooth_i    (w_smooth_mode),
-    .ocr_threshold_i   (ocr_threshold),
-    .reject_reason_i   (ocr_reject_reason),
-    .rgb_o             (pipe_rgb_ocr)
+    .clk(clk_pixel),.rst_n(rstn_pixel),.vsync_i(pipe_vs),.de_i(pipe_de),
+    .x_o(overlay_x),.y_o(overlay_y)
 );
 
 //---------------------------------------------------------------------
@@ -1531,7 +1431,7 @@ FrameBoundCrop #(.SKIP_ROWS(3),.SKIP_COLS(2),.TOTAL_ROWS(720),.TOTAL_COLS(1280))
     .vs_i                              (pipe_vs                   ),
     .hs_i                              (pipe_hs                   ),
     .de_i                              (pipe_de                   ),
-    .data_i                            (pipe_rgb_all_detect       ),
+    .data_i                            (pipe_rgb_detect       ),
 
     .vs_o                              (boundcrop_vs              ),
     .hs_o                              (boundcrop_hs              ),
