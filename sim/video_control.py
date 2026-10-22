@@ -25,7 +25,7 @@ def main():
     ap.add_argument('--age',type=int,choices=range(16))
     ap.add_argument('--reference',type=int,choices=range(16))
     ap.add_argument('--replay-div',type=int)
-    ap.add_argument('--layout',choices=['original','edge','split'])
+    ap.add_argument('--layout',choices=['original','edge','split','overlay'])
     ap.add_argument('--view',choices=['edge','gray'])
     ap.add_argument('--iir-param',nargs=2,action='append',metavar=('INDEX','VALUE'),
                     help='Set indexed IIR parameter, e.g. --iir-param 0x06 0x10')
@@ -60,7 +60,7 @@ def main():
             s.write(bytes([0x59,previous_index]))
         updates=[(0x4A,args.age),(0x4B,args.reference),(0x4F,args.replay_div),
                  (0x4E,None if args.tnr is None else int(args.tnr=='on')),
-                 (0x4D,None if args.layout is None else {'original':0,'edge':1,'split':2}[args.layout]),
+                 (0x4D,None if args.layout is None else {'original':0,'edge':1,'split':2,'overlay':3}[args.layout]),
                  (0x56,None if args.view is None else (3 if args.view=='gray' else 0)),
                  (0x50,None if args.mode is None else MODES[args.mode])]
         for command,value in updates:

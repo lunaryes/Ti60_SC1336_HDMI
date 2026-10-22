@@ -52,3 +52,17 @@ establish timing coverage for unmatched constraints. No board validation or
 bitstream generation was performed in this optimization run.
 
 Reports: outflow/Ti60_Demo.place.rpt and outflow/Ti60_Demo.timing.rpt.
+
+## Default display mode
+
+Display mode M=3 is now left-half grayscale and right-half original RGB with
+bright yellow (FFFF00) edges. It uses corresponding halves of the full frame;
+it does not scale two complete images side by side. Mode 3 forces the edge tap
+regardless of V so grayscale display selection cannot mask the entire original.
+Any nonzero antialiased edge coverage selects yellow. No new RAM or output
+pipeline stage is added. Modes 0/1/2 retain original/edge/gray-edge split behavior.
+The shape annotations remain controlled by UART E.
+
+Select using `python sim/video_control.py --port COM6 --layout overlay` or send
+binary bytes `4D 03`. This is also the FPGA reset default. These display changes
+require rebuilding the bitstream and downloading it before they affect the board.

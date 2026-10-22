@@ -1221,7 +1221,7 @@ assign w_rgb_b = (w_rgb_b_mult >= 16'd16384) ? 8'hFF : w_rgb_b_sc[7:0];
 // Image pipeline : rgb_to_gray -> pix_window_3x3 -> canny_edge -> image_mix
 // 插入点：AWB 之后、FrameBoundCrop 之前（docs/ARCH.md §1），全部在 clk_pixel 单域
 // =========================================================================================================================================
-localparam IMG_MODE_DEF = 2'd3;  // 0=原图 1=边缘图 2=分屏(左灰度+右边缘) 3=画中画(暂等同分屏)
+localparam IMG_MODE_DEF = 2'd3;  // 0=原图 1=边缘图 2=分屏(左灰度+右边缘) 3=左灰度+右原图叠加亮黄色边缘（默认）
 localparam IMG_VIEW_DEF = 2'd0;  // 0=灰度抗锯齿边缘图 1=mag8 图 2=六状态假彩图 3=Y 图
                                  // （四种视图的口径见 image_pipeline_top 的【view_i】）
 localparam IMG_THR_DEF  = 8'd12; // Canny 强边阈值（内部 mag8 = mag>>3 域，弱边 = 该值/2）
@@ -1358,7 +1358,7 @@ image_pipeline_top #(.IMG_W(1280),.IMG_H(720),.LATENCY(IMG_LAT),
     .rgb_i                             ({w_rgb_r, w_rgb_g, w_rgb_b}),
     .thr_i                             (w_img_thr                 ),
     .mode_i                            (r_img_mode                ),
-    .view_i                            (r_img_view==3 ? 2'd3 : 2'd0),
+    .view_i                            ((r_img_mode==3) ? 2'd0 : (r_img_view==3 ? 2'd3 : 2'd0)),
     .smooth_mode_i                     (w_smooth_mode             ),
     .link_en_i                         (r_img_link                ),   // 'L' 运行时开关
 
