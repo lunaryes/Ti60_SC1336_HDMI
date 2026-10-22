@@ -195,7 +195,7 @@ module uart_cmd #(
     //-----------------------------------------------------------------
     localparam [7:0] C_T = 8'h54, C_V = 8'h56, C_M = 8'h4D, C_R = 8'h52,
                      C_A = 8'h41, C_B = 8'h42, C_H = 8'h48, C_S = 8'h53,
-                     C_L = 8'h4C;
+                     C_L = 8'h4C, C_Q=8'h51;
 
     reg       p_wait;                 // 正在等参数字节
     reg [7:0] p_cmd;
@@ -232,6 +232,13 @@ module uart_cmd #(
                         C_H: begin
                             // 只出请求脉冲；回包由 gray_hist_uart 负责
                             hist_req_o <= 1'b1;
+                        end
+                        C_Q: begin
+                            tx_d[0]<=8'h41;tx_d[1]<=8'h41;tx_d[2]<=8'h01;
+                            tx_d[3]<=8'd2; // Fixed interpolated grayscale AA
+                            tx_d[4]<=thr_read_i;
+                            tx_d[5]<={6'd0,smooth_read_i};tx_d[6]<={7'd0,link_o};tx_d[7]<=8'h0a;
+                            tx_req<=1;
                         end
                         C_R: begin
                             tx_d[0] <= thr_read_i;       // 实际生效值（含按键）

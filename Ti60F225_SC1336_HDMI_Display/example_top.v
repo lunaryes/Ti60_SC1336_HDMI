@@ -1150,7 +1150,7 @@ assign w_rgb_b = (w_rgb_b_mult >= 16'd16384) ? 8'hFF : w_rgb_b_sc[7:0];
 // 插入点：AWB 之后、FrameBoundCrop 之前（docs/ARCH.md §1），全部在 clk_pixel 单域
 // =========================================================================================================================================
 localparam IMG_MODE_DEF = 2'd3;  // 0=原图 1=边缘图 2=分屏(左灰度+右边缘) 3=画中画(暂等同分屏)
-localparam IMG_VIEW_DEF = 2'd0;  // 0=二值边缘图 1=mag8 图 2=六状态假彩图 3=Y 图
+localparam IMG_VIEW_DEF = 2'd0;  // 0=灰度抗锯齿边缘图 1=mag8 图 2=六状态假彩图 3=Y 图
                                  // （四种视图的口径见 image_pipeline_top 的【view_i】）
 localparam IMG_THR_DEF  = 8'd12; // Canny 强边阈值（内部 mag8 = mag>>3 域，弱边 = 该值/2）
                                  // ★★ 从 40 → 16 → 12：原值 40 实际要求满幅 **42%** 的对比度
@@ -1169,7 +1169,7 @@ localparam IMG_LINK_DEF = 1'b0;  // 方向约束流式边缘连接复位值：1 
                                  //   'L' 命令可运行时切换（view=2 下绿色 = 仅因传播保留的弱边）；
                                  //   关掉即退回"单遍滞后 + 1 像素膨胀"的旧行为，用来上板对比。
                                  //   反馈用 2 块 IMG_W×3bit 行缓存（ping-pong），不增加流水线延迟。
-localparam IMG_LAT      = 19;    // = image_pipeline_top 的 LATENCY，两处必须一致
+localparam IMG_LAT      = 23;    // = image_pipeline_top 的 LATENCY，两处必须一致
                                  //   （2026-10-17 接入 3x3 中值：+1 中值 +2 后级窗口）
 
 wire                                    pipe_vs                    ;
@@ -1292,7 +1292,7 @@ canny_threshold_key_ctrl #(
 
 image_pipeline_top #(.IMG_W(1280),.IMG_H(720),.LATENCY(IMG_LAT),
                      .DBG_LINK_COLOR(1),
-                     .LINK_TURN90(0),.LINK_GAP1(1),.WEAK_STRUCT(1)) u_image_pipeline(   // ★临时诊断：view2 洋红=条件成立被门控；弱结构保留开
+                     .LINK_TURN90(0),.LINK_GAP1(1),.WEAK_STRUCT(1),.EDGE_AA(1)) u_image_pipeline(   // ★临时诊断：view2 洋红=条件成立被门控；弱结构保留开
     .clk_i                             (clk_pixel                 ),
     .rst_ni                            (rstn_pixel                ),
 
@@ -1362,7 +1362,7 @@ wire                                    boundcrop_vs               ;
 wire                                    boundcrop_hs               ;
 wire                                    boundcrop_de               ;
 wire                   [  23:0]         boundcrop_data             ;
-FrameBoundCrop #(.SKIP_ROWS(2),.SKIP_COLS(2),.TOTAL_ROWS(720),.TOTAL_COLS(1280)) inst2_FrameCrop(
+FrameBoundCrop #(.SKIP_ROWS(3),.SKIP_COLS(2),.TOTAL_ROWS(720),.TOTAL_COLS(1280)) inst2_FrameCrop(
     .clk_i                             (clk_pixel                 ),
     .rst_i                             (~rstn_pixel               ),
 

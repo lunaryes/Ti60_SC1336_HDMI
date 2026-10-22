@@ -88,7 +88,8 @@ module image_pipeline_top #(
     parameter integer LINK_TURN90 = 0,
     parameter integer LINK_GAP1   = 0,
     // ★ 弱结构保留（不依赖强种子的第三条保留路径），见 canny_edge.v。
-    parameter integer WEAK_STRUCT = 0
+    parameter integer WEAK_STRUCT = 0,
+    parameter integer EDGE_AA = 0
 )(
     input  wire        clk_i,        // clk_pixel
     input  wire        rst_ni,
@@ -267,7 +268,7 @@ module image_pipeline_top #(
         .LATENCY     (CANNY_LAT),
         .LINK_TURN90 (LINK_TURN90),
         .LINK_GAP1   (LINK_GAP1),
-        .WEAK_STRUCT (WEAK_STRUCT)
+        .WEAK_STRUCT (WEAK_STRUCT),.EDGE_AA(EDGE_AA)
     ) u_canny_edge (
         .clk     (clk_i),
         .rst_n   (rst_ni),
@@ -280,7 +281,7 @@ module image_pipeline_top #(
         .thr_high_i (thr_high),
         .thr_low_i  (thr_low),
         .smooth_mode_i (smooth_mode_i),
-        .link_en_i  (link_en_i),
+        .link_en_i  (link_en_i),.aa_o(can_aa),
 
         .vsync_o (can_vs),
         .de_o    (can_de),
@@ -325,6 +326,7 @@ module image_pipeline_top #(
     //          下移 1 行，边缘图下移 4 行，所以本视图比边缘图高 3 行，量对比度
     //          不受影响。
     //-----------------------------------------------------------------
+    wire [11:0] can_aa;
     wire [8:0] mag8x2      = {1'b0, can_mag8} << 1;
     wire [7:0] mag8_view   = mag8x2[8] ? 8'hFF : mag8x2[7:0];
 
@@ -383,8 +385,22 @@ module image_pipeline_top #(
     wire [23:0] orig_rgb = orig_dly[ORIG_LAT-1];
 
     //-----------------------------------------------------------------
-    // 7) 合成：vsync / de 由 Canny 链给出，与两路图像严格同拍
+    // 7) Common display alignment: optional 4-cycle renderer for all modes.
     //-----------------------------------------------------------------
+    wire display_vs,display_de;
+    wire [23:0] display_orig,display_gray,display_edge;
+    generate if(EDGE_AA) begin: GEN_AA_DISPLAY
+        edge_aa_renderer #(.IMG_W(IMG_W),.IMG_H(IMG_H)) u_aa(
+            .clk(clk_i),.rst_n(rst_ni),.vs_i(can_vs),.de_i(can_de),
+            .orig_i(orig_rgb),.gray_i(gray_rgb_view[7:0]),.rgb_i(edge_rgb),
+            .point_i({can_edge,can_aa}),.aa_i(view_i==0),
+            .vs_o(display_vs),.de_o(display_de),.orig_o(display_orig),
+            .gray_o(display_gray),.rgb_o(display_edge));
+    end else begin: GEN_NO_AA_DISPLAY
+        assign display_vs=can_vs;assign display_de=can_de;
+        assign display_orig=orig_rgb;assign display_gray=gray_rgb_view;
+        assign display_edge=edge_rgb;
+    end endgenerate
     image_mix #(
         .IMG_W (IMG_W),
         .IMG_H (IMG_H)
@@ -392,11 +408,11 @@ module image_pipeline_top #(
         .clk_i      (clk_i),
         .rst_ni     (rst_ni),
 
-        .vsync_i    (can_vs),
-        .de_i       (can_de),
-        .orig_rgb_i (orig_rgb),
-        .gray_rgb_i (gray_rgb_view),
-        .edge_rgb_i (edge_rgb),
+        .vsync_i    (display_vs),
+        .de_i       (display_de),
+        .orig_rgb_i (display_orig),
+        .gray_rgb_i (display_gray),
+        .edge_rgb_i (display_edge),
         .mode_i     (mode_i),
 
         .vsync_o    (vsync_o),
@@ -404,4 +420,149 @@ module image_pipeline_top #(
         .rgb_o      (rgb_o)
     );
 
+endmodule
+
+// Local one-pixel-wide line coverage. DX/DY are pixel minus candidate.
+// point={edge,axis_y,same_sign,positive_offset,offset_Q4[3:0],ratio_Q4[4:0]}.
+// Approximate triangular pixel footprint, tangent support limited to 0.75px.
+module edge_aa_coverage #(parameter integer DX=0,DY=0)(
+    input wire [12:0] point_i,
+    output reg [7:0] coverage_o
+);
+    reg [4:0] r;
+    reg [3:0] f;
+    reg [8:0] inv_norm,r2;
+    reg [5:0] factor;
+    reg [9:0] tangent_limit;
+    reg signed [12:0] dot_value,tangent_value,signed_slope,slope_dx,slope_dy,offset_correction;
+    reg [9:0] offset_product;
+    localparam signed [12:0] BASE_X=DX*256,BASE_Y=DY*256;
+    reg [12:0] abs_dot,abs_tangent;
+    reg [21:0] distance_value;
+    always @(*) begin
+        r=(point_i[4:0]>16)?5'd16:point_i[4:0];
+        f=(point_i[8:5]>8)?4'd8:point_i[8:5];
+        case(r)
+            5'd0:inv_norm=9'd256;
+            5'd1:inv_norm=9'd256;
+            5'd2:inv_norm=9'd254;
+            5'd3:inv_norm=9'd252;
+            5'd4:inv_norm=9'd248;
+            5'd5:inv_norm=9'd244;
+            5'd6:inv_norm=9'd240;
+            5'd7:inv_norm=9'd235;
+            5'd8:inv_norm=9'd229;
+            5'd9:inv_norm=9'd223;
+            5'd10:inv_norm=9'd217;
+            5'd11:inv_norm=9'd211;
+            5'd12:inv_norm=9'd205;
+            5'd13:inv_norm=9'd199;
+            5'd14:inv_norm=9'd193;
+            5'd15:inv_norm=9'd187;
+            5'd16:inv_norm=9'd181;
+            default:inv_norm=9'd181;
+        endcase
+        case(r)
+            5'd0:tangent_limit=10'd192;
+            5'd1:tangent_limit=10'd192;
+            5'd2:tangent_limit=10'd193;
+            5'd3:tangent_limit=10'd195;
+            5'd4:tangent_limit=10'd197;
+            5'd5:tangent_limit=10'd201;
+            5'd6:tangent_limit=10'd205;
+            5'd7:tangent_limit=10'd209;
+            5'd8:tangent_limit=10'd214;
+            5'd9:tangent_limit=10'd220;
+            5'd10:tangent_limit=10'd226;
+            5'd11:tangent_limit=10'd232;
+            5'd12:tangent_limit=10'd240;
+            5'd13:tangent_limit=10'd247;
+            5'd14:tangent_limit=10'd255;
+            5'd15:tangent_limit=10'd263;
+            5'd16:tangent_limit=10'd271;
+            default:tangent_limit=10'd271;
+        endcase
+        r2=r*r;factor=6'd16+{1'b0,r2[8:4]};
+        // Select signs explicitly: integer +/-1 products would infer wide DSPs.
+        signed_slope=point_i[10]?$signed({4'd0,r,4'd0}):-$signed({4'd0,r,4'd0});
+        slope_dx=(DX==1)?signed_slope:((DX==-1)?-signed_slope:13'sd0);
+        slope_dy=(DY==1)?signed_slope:((DY==-1)?-signed_slope:13'sd0);
+        offset_product=f*factor;
+        offset_correction=point_i[9]?$signed({3'd0,offset_product}):-$signed({3'd0,offset_product});
+        if(!point_i[11]) begin
+            dot_value=BASE_X+slope_dy;
+            tangent_value=BASE_Y-slope_dx;
+        end else begin
+            dot_value=BASE_Y+slope_dx;
+            tangent_value=BASE_X-slope_dy;
+        end
+        dot_value=dot_value-offset_correction;
+        abs_dot=dot_value[12]?-dot_value:dot_value;
+        abs_tangent=tangent_value[12]?-tangent_value:tangent_value;
+        distance_value=abs_dot*inv_norm;
+        coverage_o=0;
+        if(point_i[12] && abs_tangent<=tangent_limit && distance_value<22'd65280)
+            coverage_o=8'd255-distance_value[15:8];
+    end
+endmodule
+
+// Two window cycles + two arithmetic/output cycles. Every image path traverses
+// the same center selection: one additional row of spatial window displacement.
+module edge_aa_renderer #(parameter integer IMG_W=1280,IMG_H=720)(
+    input wire clk,rst_n,vs_i,de_i,
+    input wire [23:0] orig_i,rgb_i,
+    input wire [7:0] gray_i,
+    input wire [12:0] point_i,
+    input wire aa_i,
+    output reg vs_o,de_o,
+    output reg [23:0] orig_o,gray_o,rgb_o
+);
+    wire [69:0] w11,w12,w13,w21,w22,w23,w31,w32,w33;
+    wire wvs,wde;
+    canny_win3x3 #(.W(70),.IMG_W(IMG_W)) u_window(
+        .clk(clk),.rst_n(rst_n),.vsync_i(vs_i),.de_i(de_i),
+        .din({orig_i,gray_i,rgb_i,aa_i,point_i}),.vsync_o(wvs),.de_o(wde),
+        .w11(w11),.w12(w12),.w13(w13),.w21(w21),.w22(w22),.w23(w23),
+        .w31(w31),.w32(w32),.w33(w33));
+    wire [7:0] c11,c12,c13,c21,c22,c23,c31,c32,c33;
+    edge_aa_coverage #(.DX(1),.DY(1)) a11(w11[12:0],c11);
+    edge_aa_coverage #(.DX(0),.DY(1)) a12(w12[12:0],c12);
+    edge_aa_coverage #(.DX(-1),.DY(1)) a13(w13[12:0],c13);
+    edge_aa_coverage #(.DX(1),.DY(0)) a21(w21[12:0],c21);
+    edge_aa_coverage #(.DX(0),.DY(0)) a22(w22[12:0],c22);
+    edge_aa_coverage #(.DX(-1),.DY(0)) a23(w23[12:0],c23);
+    edge_aa_coverage #(.DX(1),.DY(-1)) a31(w31[12:0],c31);
+    edge_aa_coverage #(.DX(0),.DY(-1)) a32(w32[12:0],c32);
+    edge_aa_coverage #(.DX(-1),.DY(-1)) a33(w33[12:0],c33);
+    reg [7:0] q11,q12,q13,q21,q22,q23,q31,q32,q33;
+    reg v1,d1,aa1;
+    reg [23:0] orig1,rgb1;
+    reg [7:0] gray1;
+    reg wvs_d;
+    reg [15:0] row,col;
+    function [7:0] max3;
+        input [7:0] a,b,c;
+        begin max3=(a>=b && a>=c)?a:((b>=c)?b:c);end
+    endfunction
+    wire [7:0] maximum=max3(max3(q11,q12,q13),max3(q21,q22,q23),max3(q31,q32,q33));
+    always @(posedge clk or negedge rst_n) begin
+        if(!rst_n) begin
+            wvs_d<=0;row<=0;col<=0;
+            q11<=0;q12<=0;q13<=0;q21<=0;q22<=0;q23<=0;q31<=0;q32<=0;q33<=0;
+            v1<=0;d1<=0;aa1<=0;orig1<=0;gray1<=0;rgb1<=0;
+            vs_o<=0;de_o<=0;orig_o<=0;gray_o<=0;rgb_o<=0;
+        end else begin
+            wvs_d<=wvs;
+            if(wvs && !wvs_d) begin row<=0;col<=0;end
+            else if(wde) begin
+                if(col==IMG_W-1) begin col<=0;row<=row+1;end else col<=col+1;
+            end
+            q11<=c11;q12<=c12;q13<=c13;q21<=c21;q22<=c22;q23<=c23;q31<=c31;q32<=c32;q33<=c33;
+            v1<=wvs;d1<=wde;
+            aa1<=w22[13] && row>=2 && row<IMG_H-1 && col>=2 && col<IMG_W-2;
+            orig1<=w22[69:46];gray1<=w22[45:38];rgb1<=w22[37:14];
+            vs_o<=v1;de_o<=d1;orig_o<=orig1;gray_o<={3{gray1}};
+            rgb_o<=aa1?{3{maximum}}:rgb1;
+        end
+    end
 endmodule

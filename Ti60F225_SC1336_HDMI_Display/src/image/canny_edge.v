@@ -156,7 +156,8 @@ module canny_edge #(
     //     thr_low..thr_high 之间且不挨强边 —— link 永远够不到；而细线上
     //     每个像素天然有 ≥2 个同向弱邻居，孤立噪点没有，用连通性区分两者。
     //     默认 0：仿真参考模型不认识这条路径。
-    parameter integer WEAK_STRUCT = 0
+    parameter integer WEAK_STRUCT = 0,
+    parameter integer EDGE_AA = 0
 )(
     input  wire        clk,
     input  wire        rst_n,
@@ -207,7 +208,8 @@ module canny_edge #(
     output reg         cond_o,
     output wire        link_en_dbg_o,
     output reg         cond_seen_o,
-    output reg         link_seen_o
+    output reg         link_seen_o,
+    output reg [11:0] aa_o
 );
 
     //-----------------------------------------------------------------
@@ -375,6 +377,10 @@ module canny_edge #(
     // |Gy| * 256 = |Gy|<<8，纯位拼接
     wire [19:0] ay256 = {1'b0, ay_s6, 8'b0};
 
+    wire [6:0] geometry;
+    reg [6:0] geometry_s7;
+    edge_gradient_meta u_geometry(.ax_i(ax_s6),.ay_i(ay_s6),
+        .same_i(~(sign_s6[1]^sign_s6[0])),.meta_o(geometry));
     reg [11:0] mag_s7;
     reg [19:0] ax106_s7, ay256_s7;
     reg [1:0]  sign_s7;                  // {Gx 符号, Gy 符号}，与 mag_s7 同像素
@@ -383,6 +389,7 @@ module canny_edge #(
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             mag_s7   <= 12'd0;
+            geometry_s7<=0;
             ax106_s7 <= 20'd0;
             ay256_s7 <= 20'd0;
             sign_s7  <= 2'b00;
@@ -390,6 +397,7 @@ module canny_edge #(
             de_s7    <= 1'b0;
         end else begin
             mag_s7   <= mag;
+            geometry_s7<=geometry;
             ax106_s7 <= ax106;
             ay256_s7 <= ay256;
             sign_s7  <= sign_s6;
@@ -423,16 +431,16 @@ module canny_edge #(
     // 梯度字：14bit = {mag[11:0], dir[1:0]}
     //   ★ 方案 §11 决议 3：行缓存存 14bit 精确版，不存饱和后的 8bit ——
     //     NMS 是幅值比较，饱和到 255 后平局会大量出现，取消"严格极大值"的意义。
-    reg [13:0] grad_s8;
+    reg [20:0] grad_s8;
     reg        vsync_s8, de_s8;
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            grad_s8  <= 14'd0;
+            grad_s8  <= 21'd0;
             vsync_s8 <= 1'b0;
             de_s8    <= 1'b0;
         end else begin
-            grad_s8  <= {mag_s7, dir};
+            grad_s8  <= {geometry_s7,mag_s7,dir};
             vsync_s8 <= vsync_s7;
             de_s8    <= de_s7;
         end
@@ -443,12 +451,12 @@ module canny_edge #(
     //   NMS 要拿中心像素的幅值和它 8 邻域的幅值比，所以梯度场自己也要一窗。
     //-----------------------------------------------------------------
     wire        mwin_vs, mwin_de;
-    wire [13:0] m11, m12, m13;
-    wire [13:0] m21, m22, m23;
-    wire [13:0] m31, m32, m33;
+    wire [20:0] m11, m12, m13;
+    wire [20:0] m21, m22, m23;
+    wire [20:0] m31, m32, m33;
 
     canny_win3x3 #(
-        .W     (14),
+        .W     (21),
         .IMG_W (IMG_W)
     ) u_mwin (
         .clk     (clk),
@@ -495,7 +503,16 @@ module canny_edge #(
         endcase
     end
 
-    wire nms_keep = (mag_c >= nb1) && (mag_c >= nb2);
+    wire nms_legacy = (mag_c >= nb1) && (mag_c >= nb2);
+    wire nms_interpolated;
+    wire [11:0] aa_geometry;
+    edge_aa_interpolate u_interpolated(
+        .mag_i(mag_c),.ratio_i(m22[20:16]),.axis_y_i(m22[15]),.same_i(m22[14]),
+        .m11(m11[13:2]),.m12(m12[13:2]),.m13(m13[13:2]),
+        .m21(m21[13:2]),.m23(m23[13:2]),
+        .m31(m31[13:2]),.m32(m32[13:2]),.m33(m33[13:2]),
+        .keep_o(nms_interpolated),.geometry_o(aa_geometry));
+    wire nms_keep = (EDGE_AA != 0) ? nms_interpolated : nms_legacy;
 
     // mag8：内部判据域（未饱和）。14bit 梯度字是 {mag[11:0], dir[1:0]}，
     // 即 w[13:2] = mag，所以 mag8 = mag >> 3 = w[13:5] 的低 8 位 = w[12:5]。
@@ -503,7 +520,7 @@ module canny_edge #(
     // 恒为 0（mag8 上界 255，也印证最高位恒 0），写全 9 bit 会被截掉最高位、
     // 综合工具也会报 WIDTHTRUNC。写成函数，免得两处取错比特位。
     function [7:0] mag8_of;
-        input [13:0] w;
+        input [20:0] w;
         begin
             mag8_of = w[12:5];
         end
@@ -724,6 +741,7 @@ module canny_edge #(
         end
     end
 
+    reg [11:0] aa_s11;
     reg [11:0] mag_s11;
     reg [7:0]  mag8_s11;
     reg [1:0]  cls_s11;
@@ -735,6 +753,7 @@ module canny_edge #(
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             mag_s11   <= 12'd0;
+            aa_s11<=0;
             mag8_s11  <= 8'd0;
             cls_s11   <= 2'b00;
             edge_s11  <= 1'b0;
@@ -744,6 +763,7 @@ module canny_edge #(
             de_s11    <= 1'b0;
         end else begin
             mag_s11   <= mag_c;
+            aa_s11<=aa_geometry;
             mag8_s11  <= mag8_c;
             cls_s11   <= cls_c;
             edge_s11  <= edge_c;
@@ -772,6 +792,7 @@ module canny_edge #(
             de_o    <= 1'b0;
             mag_o   <= 8'd0;
             edge_o  <= 1'b0;
+            aa_o<=0;
             link_o  <= 1'b0;
             mag8_o  <= 8'd0;
             cls_o   <= 2'b00;
@@ -781,6 +802,7 @@ module canny_edge #(
             de_o    <= de_s11;
             mag_o   <= de_s11 ? mag_sat : 8'd0;
             edge_o  <= de_s11 & edge_s11;
+            aa_o<=de_s11 ? aa_s11:12'd0;
             link_o  <= de_s11 & link_s11;
             cond_o  <= de_s11 & cond_s11;
             // 调试口与 mag_o/edge_o 同一口径：de = 0 的区段一律出 0
@@ -976,4 +998,78 @@ module canny_win3x3 #(
         end
     end
 
+endmodule
+
+// Q4 minor/major ratio, four restoring steps, no variable divider.
+module edge_gradient_meta(
+    input wire [10:0] ax_i,ay_i,
+    input wire same_i,
+    output wire [6:0] meta_o
+);
+    reg [11:0] remainder_value,denominator;
+    reg [4:0] ratio;
+    integer k;
+    always @(*) begin
+        denominator={1'b0,(ax_i>=ay_i?ax_i:ay_i)};
+        remainder_value={1'b0,(ax_i>=ay_i?ay_i:ax_i)};
+        ratio=0;
+        if(denominator!=0) begin
+            if(remainder_value>=denominator) ratio=16;
+            else for(k=0;k<4;k=k+1) begin
+                remainder_value=remainder_value<<1;ratio=ratio<<1;
+                if(remainder_value>=denominator) begin
+                    remainder_value=remainder_value-denominator;ratio=ratio|5'd1;
+                end
+            end
+        end
+    end
+    assign meta_o={ratio,(ay_i>ax_i),same_i};
+endmodule
+
+// Canonical normal: right for X-major, down for Y-major.
+// geometry={axis_y,same_sign,positive_offset,abs_offset_Q4[3:0],ratio_Q4[4:0]}.
+module edge_aa_interpolate(
+    input wire [11:0] mag_i,
+    input wire [4:0] ratio_i,
+    input wire axis_y_i,same_i,
+    input wire [11:0] m11,m12,m13,m21,m23,m31,m32,m33,
+    output wire keep_o,
+    output wire [11:0] geometry_o
+);
+    reg [11:0] before_axis,after_axis,before_diag,after_diag;
+    always @(*) begin
+        if(!axis_y_i) begin
+            before_axis=m21;after_axis=m23;
+            before_diag=same_i?m11:m31;after_diag=same_i?m33:m13;
+        end else begin
+            before_axis=m12;after_axis=m32;
+            before_diag=same_i?m11:m13;after_diag=same_i?m33:m31;
+        end
+    end
+    wire [4:0] r=(ratio_i>16)?5'd16:ratio_i;
+    wire [4:0] inv=5'd16-r;
+    wire [16:0] before_value=before_axis*inv+before_diag*r;
+    wire [16:0] after_value=after_axis*inv+after_diag*r;
+    wire [16:0] center={1'b0,mag_i,4'b0};
+    // One-sided strict comparison gives a deterministic plateau representative.
+    assign keep_o=(center>before_value) && (center>=after_value);
+    wire [17:0] curvature=({1'b0,center}<<1)-{1'b0,before_value}-{1'b0,after_value};
+    wire [17:0] difference=(after_value>=before_value)?
+        {1'b0,after_value}-{1'b0,before_value}:{1'b0,before_value}-{1'b0,after_value};
+    reg [18:0] rem_value;
+    reg [3:0] offset;
+    integer i;
+    always @(*) begin
+        rem_value={1'b0,difference};offset=0;
+        if(keep_o && curvature!=0) begin
+            if(difference>=curvature) offset=8;
+            else for(i=0;i<3;i=i+1) begin
+                rem_value=rem_value<<1;offset=offset<<1;
+                if(rem_value>={1'b0,curvature}) begin
+                    rem_value=rem_value-{1'b0,curvature};offset=offset|4'd1;
+                end
+            end
+        end
+    end
+    assign geometry_o={axis_y_i,same_i,(after_value>before_value),offset,r};
 endmodule
