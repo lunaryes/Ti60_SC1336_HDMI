@@ -1,0 +1,101 @@
+[
+  {
+    "label": "live_start",
+    "mode": 0,
+    "tnr": 1,
+    "active": 0,
+    "retained": 15,
+    "source": 1102,
+    "errors": 0
+  },
+  {
+    "label": "live_advances",
+    "mode": 0,
+    "tnr": 1,
+    "active": 0,
+    "retained": 15,
+    "source": 1111,
+    "errors": 0
+  },
+  {
+    "label": "freeze",
+    "mode": 1,
+    "tnr": 1,
+    "active": 1,
+    "retained": 15,
+    "source": 1111,
+    "errors": 0
+  },
+  {
+    "label": "freeze_stable",
+    "mode": 1,
+    "tnr": 1,
+    "active": 1,
+    "retained": 15,
+    "source": 1111,
+    "errors": 0
+  },
+  {
+    "label": "historical_age3",
+    "mode": 1,
+    "tnr": 1,
+    "active": 1,
+    "retained": 15,
+    "source": 1108,
+    "errors": 0
+  },
+  {
+    "label": "replay_start",
+    "mode": 2,
+    "tnr": 1,
+    "active": 2,
+    "retained": 15,
+    "source": 1100,
+    "errors": 0
+  },
+  {
+    "label": "replay_advances",
+    "mode": 2,
+    "tnr": 1,
+    "active": 2,
+    "retained": 15,
+    "source": 1103,
+    "errors": 0
+  },
+  {
+    "label": "compare",
+    "mode": 3,
+    "tnr": 1,
+    "active": 3,
+    "retained": 15,
+    "source": 1111,
+    "errors": 0
+  },
+  {
+    "label": "difference",
+    "mode": 4,
+    "tnr": 1,
+    "active": 4,
+    "retained": 15,
+    "source": 1111,
+    "errors": 0
+  },
+  {
+    "label": "live_tnr_off",
+    "mode": 0,
+    "tnr": 0,
+    "active": 0,
+    "retained": 15,
+    "source": 1117,
+    "errors": 0
+  },
+  {
+    "label": "live_tnr_on",
+    "mode": 0,
+    "tnr": 1,
+    "active": 0,
+    "retained": 15,
+    "source": 1127,
+    "errors": 0
+  }
+]

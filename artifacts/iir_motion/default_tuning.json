@@ -1,0 +1,10 @@
+{
+  "strong_weight_code": 1,
+  "weak_weight_code": 2,
+  "strong_residual": 2,
+  "weak_residual": 5,
+  "strong_gradient": 4,
+  "weak_gradient": 8,
+  "absolute_difference": 24,
+  "dc_limit": 8
+}

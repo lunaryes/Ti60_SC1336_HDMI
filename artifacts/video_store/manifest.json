@@ -1,0 +1,28 @@
+{
+  "created": "2026-10-22T15:02:07.153653",
+  "tool": "Efinity 2026.1.132",
+  "device": "Ti60F225",
+  "programming": "JTAG SRAM only; Flash unchanged",
+  "resources": {
+    "ram": 120,
+    "xlr": 16720,
+    "dsp": 28
+  },
+  "timing_ns": {
+    "sys_setup": 3.168,
+    "pixel_setup": 3.654
+  },
+  "source_sha256": {
+    "example_top.v": "f2d33b171be6756741fb6773348384e7e4277c730c2d32f9bff7ce8d9c7db1d0",
+    "src/image/ddr_video_store.v": "30de5bdc1841def1db6418e0e8a25c0865f9f7e804a23201905aeed600d407a1",
+    "src/common/uart_cmd.v": "08009f114321a77ae01b9cdcf27ca03a91f6528f995bc68bf02ea5fd284e8ceb",
+    "Ti60_Demo.xml": "cc4fa4b0bfbbe61e27d71fb869927d5036cf8c23c8cc33f7dccd26e6215629d3"
+  },
+  "bit_sha256": "ca7588f0906d1c64aed306bcf174be8a891b45d24018e05172da8a23b6ea6727",
+  "tests": [
+    "sim/run.sh PASS",
+    "sim/run_video_store.sh PASS",
+    "board_validation.json PASS"
+  ],
+  "visual_quality": "not quantified"
+}

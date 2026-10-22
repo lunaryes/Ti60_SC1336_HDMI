@@ -632,7 +632,7 @@ module example_top
 		.alen_o			(w_ddr3_alen),
 		.atype_o			(w_ddr3_atype),
 		.avalid_o			(w_ddr3_avalid),
-		.aready_i			(w_ddr3_aready)
+		.aready_i			(w_ddr3_aready && r_ddr_unlock)
 	);
 	
 	assign w_ddr3_asize = 4; 		//	Fixed 128 bits (16 bytes, size = 4)
@@ -800,27 +800,11 @@ module example_top
 		r_cmos_fv_o <= r_cmos_fv_o + ((r_cmos_rx_vsync0_in == 2'b01) ? 1 : 0); 
 	end
 	//-----------------------------------------------------------------
-	// ★ 2026-10-20 临时诊断（第二轮）：LED 显示 link 内部状态
-	//   低电平点亮，所以统一取反：**灯亮 = 条件为真**。
-	//   led_o[0] 亮 = link_en_active == 1（帧首已锁存到 'L' 的开关值）
-	//   led_o[1] 亮 = 本帧出现过传播条件 cond（弱边 + 切向种子 + 方向兼容）
-	//   led_o[2] 亮 = 本帧真的连出过 link（完整条件，含 enable/行列门控）
-	//   led_o[3] 亮 = lvds PLL 锁定   [4] 亮 = 四路 PLL 全锁
-	//   led_o[5] = clk_pixel 心跳（约 1 Hz 交替；计数器刻意不复位）
-	//   判读：led[1] 亮而 led[2] 灭 → 种子/方向没问题，卡在 enable/门控；
-	//         led[1] 也灭 → 传播条件在板上根本没成立。
-	//   诊断结束恢复：led_o[3:0]=w_axi_tp、led_o[5]=r_cmos_fv_o[3]。
-	//-----------------------------------------------------------------
-	reg [25:0] dbg_pix_cnt;
-	always @(posedge clk_pixel) dbg_pix_cnt <= dbg_pix_cnt + 1'b1;
+	// Application DDR state, PLL lock and camera frame activity.
+    assign led_o[3:0]=~w_axi_tp[3:0];
+    assign led_o[4]=~w_pll_lock;
+    assign led_o[5]=r_cmos_fv_o[3];
 
-	assign led_o[0] = ~dbg_link_en;
-	assign led_o[1] = ~dbg_cond_seen;
-	assign led_o[2] = ~dbg_link_seen;
-	assign led_o[3] = ~lvds_pll_lock;
-	assign led_o[4] = ~w_pll_lock;
-	assign led_o[5] = dbg_pix_cnt[25];
-	//assign led_o[5] = r_cmos_fv_o[3];	// 原相机帧计数灯（诊断期间关闭）
 	
 	
 	
@@ -1024,38 +1008,123 @@ module example_top
 	wire 			w_wframe_vsync; 
 	wire 	[7:0] 	w_axi_tp; 
 	
-	axi4_ctrl #(.C_RD_END_ADDR(1280 * 720), .C_W_WIDTH(CSI_DATA_WIDTH), .C_R_WIDTH(8), .C_ID_LEN(4)) u_axi4_ctrl (
+    wire [2:0] app_play_mode;
+    wire [63:0] iir_tuning;
+    wire app_tnr,app_status_req,app_status_valid;
+    wire [3:0] app_age_a,app_age_b;
+    wire [7:0] app_replay_div;
+    wire [31:0] app_status_sys,app_status_pixel;
+    frame_status_mailbox status_mailbox(
+        .src_clk(clk_sys),.src_rst(rst_sys),.src_status(app_status_sys),
+        .dst_clk(clk_pixel),.dst_rst(~rstn_pixel),.request_i(app_status_req),
+        .valid_o(app_status_valid),.status_o(app_status_pixel));
+    // Gate both sides of the DDR command handshake until calibration completes.
+    // Otherwise the address bridge can acknowledge a command that never reached
+    // the gated DDR input, leaving a master waiting forever for its response.
+    wire ddr_app_reset=w_ddr3_ui_rst || !r_ddr_unlock;
+    (* async_reg="true" *) reg [1:0] ddr_ready_pixel;
+    always @(posedge clk_pixel or negedge rstn_pixel)begin
+      if(!rstn_pixel)ddr_ready_pixel<=0;
+      else ddr_ready_pixel<={ddr_ready_pixel[0],r_ddr_unlock};
+    end
+    wire temporal_pixel_reset=~rstn_pixel || !ddr_ready_pixel[1];
+    wire [31:0] raw_awaddr,raw_araddr,hist_awaddr,hist_araddr,raw_status,hist_status;
+    wire [7:0] raw_awlen,raw_arlen,hist_awlen,hist_arlen;
+    wire [127:0] raw_wdata,hist_wdata;
+    wire raw_awvalid,raw_awready,raw_wlast,raw_wvalid,raw_wready,raw_bvalid;
+    wire raw_arvalid,raw_arready,raw_rvalid;
+    wire hist_awvalid,hist_awready,hist_wlast,hist_wvalid,hist_wready,hist_bvalid;
+    wire hist_arvalid,hist_arready,hist_rvalid;
+    wire [15:0] raw_source_id;
+    wire [31:0] history_pixel_status,strong_pixels,weak_pixels,bypass_pixels;
+    wire history_req,history_valid;
+    frame_status_mailbox history_mailbox(
+      .src_clk(w_ddr3_ui_clk),.src_rst(w_ddr3_ui_rst),.src_status(hist_status),
+      .dst_clk(clk_pixel),.dst_rst(~rstn_pixel),.request_i(history_req),
+      .valid_o(history_valid),.status_o(history_pixel_status));
+    (* async_reg="true" *) reg [15:0] source_meta,source_pixel;
+    always @(posedge clk_pixel) begin source_meta<=raw_source_id;source_pixel<=source_meta;end
+    wire [7:0] median_y,temporal_y;
+    wire median_vs,median_de,temporal_vs,temporal_de;
+    assign app_status_sys={raw_status[31:24]|hist_status[31:24],raw_status[23:0]};
+    assign w_ddr3_wstrb=16'hffff;
+    assign w_ddr3_arid=0;
+    assign w_ddr3_rready=1'b1;
+    temporal_ddr_history u_temporal_history(
+      .sc(w_ddr3_ui_clk),.pc(clk_pixel),.rst(ddr_app_reset),.prst(temporal_pixel_reset),
+      .frame_vs(median_vs),.pixel_de(median_de),.pixel_y(median_y),
+      .source_id(source_pixel),.enable_i(app_tnr),.mode_i(app_play_mode),
+      .config_i({r_awb_gain,b_awb_gain,iir_tuning}),
+      .filtered_vs(temporal_vs),.filtered_de(temporal_de),.filtered_y(temporal_y),.status_o(hist_status),
+      .strong_pixels_o(strong_pixels),.weak_pixels_o(weak_pixels),.bypass_pixels_o(bypass_pixels),
+      .awaddr(hist_awaddr),.awlen(hist_awlen),.awvalid(hist_awvalid),.awready(hist_awready),
+      .wdata(hist_wdata),.wlast(hist_wlast),.wvalid(hist_wvalid),.wready(hist_wready),
+      .bvalid(hist_bvalid),.bresp(w_ddr3_bresp),
+      .araddr(hist_araddr),.arlen(hist_arlen),.arvalid(hist_arvalid),.arready(hist_arready),
+      .rdata(w_ddr3_rdata),.rlast(w_ddr3_rlast),.rvalid(hist_rvalid),.rresp(w_ddr3_rresp));
+    temporal_axi_mux u_temporal_mux(
+      .clk(w_ddr3_ui_clk),.rst(ddr_app_reset),
+      .a_awaddr(raw_awaddr),.b_awaddr(hist_awaddr),
+      .a_awlen(raw_awlen),.b_awlen(hist_awlen),
+      .a_awvalid(raw_awvalid),.b_awvalid(hist_awvalid),
+      .a_awready(raw_awready),.b_awready(hist_awready),
+      .a_wdata(raw_wdata),.b_wdata(hist_wdata),
+      .a_wlast(raw_wlast),.b_wlast(hist_wlast),
+      .a_wvalid(raw_wvalid),.b_wvalid(hist_wvalid),
+      .a_wready(raw_wready),.b_wready(hist_wready),
+      .a_bvalid(raw_bvalid),.b_bvalid(hist_bvalid),
+      .a_araddr(raw_araddr),.b_araddr(hist_araddr),
+      .a_arlen(raw_arlen),.b_arlen(hist_arlen),
+      .a_arvalid(raw_arvalid),.b_arvalid(hist_arvalid),
+      .a_arready(raw_arready),.b_arready(hist_arready),
+      .a_rvalid(raw_rvalid),.b_rvalid(hist_rvalid),
+      .awaddr(w_ddr3_awaddr),
+      .araddr(w_ddr3_araddr),
+      .awlen(w_ddr3_awlen),
+      .arlen(w_ddr3_arlen),
+      .awvalid(w_ddr3_awvalid),
+      .arvalid(w_ddr3_arvalid),
+      .awready(w_ddr3_awready),
+      .arready(w_ddr3_arready),
+      .wdata(w_ddr3_wdata),
+      .wlast(w_ddr3_wlast),
+      .wvalid(w_ddr3_wvalid),
+      .wready(w_ddr3_wready),
+      .bvalid(w_ddr3_bvalid),
+      .rlast(w_ddr3_rlast),
+      .rvalid(w_ddr3_rvalid));
+	ddr_video_store #(.C_RD_END_ADDR(1280 * 720), .C_W_WIDTH(CSI_DATA_WIDTH), .C_R_WIDTH(8), .C_ID_LEN(4)) u_axi4_ctrl (
 
 		.axi_clk        (w_ddr3_ui_clk            ),
-		.axi_reset      (w_ddr3_ui_rst            ),
+		.axi_reset      (ddr_app_reset            ),
 
-		.axi_awaddr     (w_ddr3_awaddr       ),
-		.axi_awlen      (w_ddr3_awlen        ),
-		.axi_awvalid    (w_ddr3_awvalid      ),
-		.axi_awready    (w_ddr3_awready      ),
+		.axi_awaddr     (raw_awaddr       ),
+		.axi_awlen      (raw_awlen        ),
+		.axi_awvalid    (raw_awvalid      ),
+		.axi_awready    (raw_awready      ),
 
-		.axi_wdata      (w_ddr3_wdata        ),
-		.axi_wstrb      (w_ddr3_wstrb        ),
-		.axi_wlast      (w_ddr3_wlast        ),
-		.axi_wvalid     (w_ddr3_wvalid       ),
-		.axi_wready     (w_ddr3_wready       ),
+		.axi_wdata      (raw_wdata        ),
+		.axi_wstrb      (),
+		.axi_wlast      (raw_wlast        ),
+		.axi_wvalid     (raw_wvalid       ),
+		.axi_wready     (raw_wready       ),
 
 		.axi_bid        (0          ),
-		.axi_bresp      (0        ),
-		.axi_bvalid     (1       ),
+		.axi_bresp      (w_ddr3_bresp),
+		.axi_bvalid     (raw_bvalid),
 
-		.axi_arid       (w_ddr3_arid         ),
-		.axi_araddr     (w_ddr3_araddr       ),
-		.axi_arlen      (w_ddr3_arlen        ),
-		.axi_arvalid    (w_ddr3_arvalid      ),
-		.axi_arready    (w_ddr3_arready      ),
+		.axi_arid       (),
+		.axi_araddr     (raw_araddr       ),
+		.axi_arlen      (raw_arlen        ),
+		.axi_arvalid    (raw_arvalid      ),
+		.axi_arready    (raw_arready      ),
 
 		.axi_rid        (w_ddr3_rid          ),
 		.axi_rdata      (w_ddr3_rdata        ),
-		.axi_rresp      (0        ),
+		.axi_rresp      (w_ddr3_rresp),
 		.axi_rlast      (w_ddr3_rlast        ),
-		.axi_rvalid     (w_ddr3_rvalid       ),
-		.axi_rready     (w_ddr3_rready       ),
+		.axi_rvalid     (raw_rvalid       ),
+		.axi_rready     (),
 
 		.wframe_pclk    (cmos_pclk          ),
 		.wframe_vsync   (cmos_frame_vsync), //w_wframe_vsync   ),		//	Writter VSync. Flush on rising edge. Connect to EOF. 
@@ -1067,9 +1136,12 @@ module example_top
 		.rframe_data_en (lcd_request             ),
 		.rframe_data    (lcd_data           ),
 		
-		.tp_o 		(w_axi_tp)
+		.play_mode_i(app_play_mode),.tnr_enable_i(1'b0),
+        .age_a_i(app_age_a),.age_b_i(app_age_b),.replay_div_i(app_replay_div),
+        .status_o(raw_status),.display_source_o(raw_source_id),
+        .tp_o 		(w_axi_tp)
 	);
-	//assign led_o[3:0] = w_axi_tp; 	// 诊断期间改由 PLL lock 驱动，见上方 LED 诊断块
+	//assign led_o[3:0] = w_axi_tp; 	// See application LED assignments above
 	
 	
 	
@@ -1169,17 +1241,12 @@ localparam IMG_LINK_DEF = 1'b0;  // 方向约束流式边缘连接复位值：1 
                                  //   'L' 命令可运行时切换（view=2 下绿色 = 仅因传播保留的弱边）；
                                  //   关掉即退回"单遍滞后 + 1 像素膨胀"的旧行为，用来上板对比。
                                  //   反馈用 2 块 IMG_W×3bit 行缓存（ping-pong），不增加流水线延迟。
-localparam IMG_LAT      = 23;    // = image_pipeline_top 的 LATENCY，两处必须一致
+localparam IMG_LAT      = 26;    // = image_pipeline_top 的 LATENCY，两处必须一致
                                  //   （2026-10-17 接入 3x3 中值：+1 中值 +2 后级窗口）
 
 wire                                    pipe_vs                    ;
 wire                                    pipe_de                    ;
 wire                   [  23:0]         pipe_rgb                   ;
-// ★ 2026-10-20 临时诊断：link 内部状态，接 LED（见下方 LED 诊断块）
-wire                                    dbg_cond_pix               ;
-wire                                    dbg_link_en                ;
-wire                                    dbg_cond_seen              ;
-wire                                    dbg_link_seen              ;
 wire                   [   7:0]         w_img_thr                  ;
 wire                   [   7:0]         w_uart_thr                 ;   // uart_cmd 'T' 写入值
 wire                                    w_uart_thr_valid           ;   // 同拍单脉冲
@@ -1191,27 +1258,9 @@ wire                   [   1:0]         w_smooth_mode              ;   // 实际
 wire                                    r_img_link                 ;   // uart_cmd 'L' 寄存器
 
 //---------------------------------------------------------------------
-// M6 片内灰度直方图（无采集卡时量 Y 分布）
-//   uart_cmd 'H' → hist_req（单拍）→ gray_hist_uart 测完整一帧 →
-//   778 字节回传。两个模块共用 uart_tx_o，所以：
-//     · hist_busy=1 时把 uart_cmd 的 rx_i 拉高，屏蔽新命令；
-//     · hist_tx_busy=1 时把 TX 引脚切给直方图；
-//     · gray_hist_uart 发流前还会等 cmd_tx_busy=0，避免抢在途回包。
-//   详见 src/common/gray_hist_uart.v 头注释。
-//---------------------------------------------------------------------
-wire                                    hist_req                   ;   // uart_cmd 'H' 单拍
-wire                                    cmd_tx_busy                ;   // uart_cmd TX 忙
-wire                                    cmd_tx                     ;   // uart_cmd TX 引脚
-wire                                    hist_busy                  ;   // 直方图测量/回传中
-wire                                    hist_tx_busy               ;   // 直方图正在发流
-wire                                    hist_tx                    ;   // 直方图 TX 引脚
-wire                                    uart_cmd_rx                ;   // 门控后的 RX
-wire                   [   7:0]         hist_y                     ;   // pipeline 的 Y 抽头
-wire                                    hist_de                    ;
-wire                                    hist_vs                    ;
-
-// 直方图忙时 uart_cmd 收到的是"空闲高"，不会再解析任何字节
-assign uart_cmd_rx = hist_busy ? 1'b1 : uart_rx_i;
+// Application UART: controls and atomic frame-store status only.
+wire cmd_tx_busy,cmd_tx;
+wire uart_cmd_rx=uart_rx_i;
 
 //---------------------------------------------------------------------
 // 串口命令接口：把 view / mode 从编译期常量变成运行时寄存器，现场调参不用
@@ -1240,7 +1289,7 @@ uart_cmd #(
     .clk    (clk_pixel                 ),
     .rst_n  (rstn_pixel                ),
     .rx_i   (uart_cmd_rx               ),   // 直方图忙时被拉高（见上）
-    .tx_o   (cmd_tx                    ),   // 与 hist_tx 二选一后送 uart_tx_o
+    .tx_o   (cmd_tx                    ),   // Application UART TX
 
     .thr_read_i   (w_img_thr            ),   // 'R' 回读实际生效阈值（含按键）
     .smooth_read_i(w_smooth_mode        ),   // 'R' 回读实际生效平滑模式
@@ -1255,8 +1304,13 @@ uart_cmd #(
     .gain_r_o (r_awb_gain              ),   // AWB R 增益（1/64 定点，复位 112 = ×1.75）
     .gain_b_o (b_awb_gain              ),   // AWB B 增益（复位 96 = ×1.50）
 
-    .hist_req_o (hist_req              ),   // 'H' → 直方图模块
-    .tx_busy_o  (cmd_tx_busy           )    // 直方图发流前避让在途回包
+    .play_mode_o(app_play_mode),.tnr_enable_o(app_tnr),
+    .age_a_o(app_age_a),.age_b_o(app_age_b),.replay_div_o(app_replay_div),
+    .status_req_o(app_status_req),.status_valid_i(app_status_valid),.app_status_i(app_status_pixel),
+    .iir_tuning_o(iir_tuning),.history_req_o(history_req),.history_valid_i(history_valid),.history_status_i(history_pixel_status),
+    .strong_pixels_i(strong_pixels),.weak_pixels_i(weak_pixels),.bypass_pixels_i(bypass_pixels),
+    .hist_req_o (),   // Historical diagnostic request, unused
+    .tx_busy_o  (cmd_tx_busy           )    // Application command reply busy
 );
 
 //---------------------------------------------------------------------
@@ -1291,8 +1345,8 @@ canny_threshold_key_ctrl #(
 );
 
 image_pipeline_top #(.IMG_W(1280),.IMG_H(720),.LATENCY(IMG_LAT),
-                     .DBG_LINK_COLOR(1),
-                     .LINK_TURN90(0),.LINK_GAP1(1),.WEAK_STRUCT(1),.EDGE_AA(1)) u_image_pipeline(   // ★临时诊断：view2 洋红=条件成立被门控；弱结构保留开
+                     .TEMPORAL_EXT(1),.DBG_LINK_COLOR(0),
+                     .LINK_TURN90(0),.LINK_GAP1(1),.WEAK_STRUCT(1),.EDGE_AA(1)) u_image_pipeline(   // Application edge/gray views; weak structure retained
     .clk_i                             (clk_pixel                 ),
     .rst_ni                            (rstn_pixel                ),
 
@@ -1301,7 +1355,7 @@ image_pipeline_top #(.IMG_W(1280),.IMG_H(720),.LATENCY(IMG_LAT),
     .rgb_i                             ({w_rgb_r, w_rgb_g, w_rgb_b}),
     .thr_i                             (w_img_thr                 ),
     .mode_i                            (r_img_mode                ),
-    .view_i                            (r_img_view                ),
+    .view_i                            (r_img_view==3 ? 2'd3 : 2'd0),
     .smooth_mode_i                     (w_smooth_mode             ),
     .link_en_i                         (r_img_link                ),   // 'L' 运行时开关
 
@@ -1310,43 +1364,21 @@ image_pipeline_top #(.IMG_W(1280),.IMG_H(720),.LATENCY(IMG_LAT),
     .rgb_o                             (pipe_rgb                  ),
 
     // M6 调试抽头：中值后、Canny 实际看到的 Y/de/vs（不增加逻辑）
-    .dbg_y_o                           (hist_y                    ),
-    .dbg_de_o                          (hist_de                   ),
-    .dbg_vs_o                          (hist_vs                   ),
+    .dbg_y_o                           (median_y),
+    .dbg_de_o                          (median_de),
+    .dbg_vs_o                          (median_vs),
 
-    .dbg_cond_o                        (dbg_cond_pix              ),
-    .dbg_link_en_o                     (dbg_link_en               ),
-    .dbg_cond_seen_o                   (dbg_cond_seen             ),
-    .dbg_link_seen_o                   (dbg_link_seen             )
+    .dbg_cond_o                        (),
+    .dbg_link_en_o                     (),
+    .dbg_cond_seen_o                   (),
+    .dbg_link_seen_o                   (),
+    .temporal_y_i(temporal_y),.temporal_de_i(temporal_de),.temporal_vs_i(temporal_vs)
 );
 
 //---------------------------------------------------------------------
-// 片内灰度直方图：测一帧 Y 分布，778 字节从 UART 回传（'H' 触发）
-//   跑在 clk_pixel，与流水线同域；实测 1 块 EFX_RAM10、225 FF、0 DSP。
-//   不插串口 / 不发 'H' 时它只是空闲，不影响画面和原有命令。
+// Application command UART, with no histogram/image diagnostic TX mux.
 //---------------------------------------------------------------------
-gray_hist_uart #(
-    .CLK_FREQ (74250000),
-    .BAUD     (460800)
-) u_gray_hist (
-    .clk           (clk_pixel                  ),
-    .rst_n         (rstn_pixel                 ),
-
-    .y_i           (hist_y                     ),
-    .de_i          (hist_de                    ),
-    .vsync_i       (hist_vs                    ),
-
-    .hist_req_i    (hist_req                   ),
-    .cmd_tx_busy_i (cmd_tx_busy                ),
-
-    .busy_o        (hist_busy                  ),
-    .tx_busy_o     (hist_tx_busy               ),
-    .tx_o          (hist_tx                    )
-);
-
-// UART TX 引脚二选一。两边空闲电平都是高，切换只发生在 uart_cmd 空闲之后
-// （gray_hist_uart 在 H_DUMP_INIT 等 cmd_tx_busy=0），不会截断在途字节。
-assign uart_tx_o = hist_tx_busy ? hist_tx : cmd_tx;
+assign uart_tx_o = cmd_tx;
 
 // hsync 要比 de 早 IMG_LAT 个像素才与流水线后的数据同拍（= image_pipeline_top 的
 // LATENCY），否则 rgb2dvi 送出的 HS 与 DE 错位，HDMI 画面横移。

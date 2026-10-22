@@ -1,0 +1,416 @@
+make: Entering directory '/mnt/d/fpga4/07-FPGA_HDL_Image-2023.2/07-1_Ti60_SC1336_HDMI_1280720/sim/build/obj_dir'
+make: Nothing to be done for 'default'.
+make: Leaving directory '/mnt/d/fpga4/07-FPGA_HDL_Image-2023.2/07-1_Ti60_SC1336_HDMI_1280720/sim/build/obj_dir'
+- V e r i l a t i o n   R e p o r t: Verilator 5.029 devel rev v5.028-218-g81ee89de1
+- Verilator: Built from 0.000 MB sources in 0 modules, into 0.000 MB in 0 C++ files needing 0.000 MB
+- Verilator: Walltime 0.146 s (elab=0.000, cvt=0.000, bld=0.065); cpu 0.010 s on 1 threads; alloced 19.078 MB
+=== uniform ===
+  延迟 14 拍（期望 14）  消隐期错误 0  行数 97 短0 长0  抓取 2048/2048
+  对齐偏移 (dr,dc) = (-3,0)（写死的流水线偏移）；比对 1188 点，失配 0 点
+  edge 比对 1040 点，失配 0 点（参考 = NMS + 双阈值滞后，thr 16/8）
+  link 比对 1040 点，失配 0 点（参考传播保留 0 点，link_en=0）
+  OK
+  阈值统计：mag8 >= 16 的像素 0 → 最终 edge 0 点（其中滞后连上的弱边 0 点）
+  边界自检（均匀场，第 6 行起）：内部（第 4..61 列）mag!=0 的点 0；整幅 edge 0 点
+    边界区第 62 列：26 个点非零，取值 [32]
+    边界区第 63 列：26 个点非零，取值 [16]
+  mag 峰值：canny 0 / sobel 0；饱和幅值 > 40 的像素：canny 0 / sobel 0
+=== impulse ===
+  延迟 14 拍（期望 14）  消隐期错误 0  行数 97 短0 长0  抓取 2048/2048
+  对齐偏移 (dr,dc) = (-3,0)（写死的流水线偏移）；比对 1188 点，失配 0 点
+  edge 比对 1040 点，失配 0 点（参考 = NMS + 双阈值滞后，thr 16/8）
+  link 比对 1040 点，失配 0 点（参考传播保留 0 点，link_en=0）
+  OK
+  阈值统计：mag8 >= 16 的像素 8 → 最终 edge 12 点（其中滞后连上的弱边 4 点）
+  mag 峰值：canny 250 / sobel 255；饱和幅值 > 40 的像素：canny 20 / sobel 8
+=== lines ===
+  延迟 14 拍（期望 14）  消隐期错误 0  行数 97 短0 长0  抓取 2048/2048
+  对齐偏移 (dr,dc) = (-3,0)（写死的流水线偏移）；比对 1188 点，失配 0 点
+  edge 比对 1040 点，失配 0 点（参考 = NMS + 双阈值滞后，thr 16/8）
+  link 比对 1040 点，失配 0 点（参考传播保留 0 点，link_en=0）
+  OK
+  阈值统计：mag8 >= 16 的像素 564 → 最终 edge 338 点（其中滞后连上的弱边 0 点）
+  mag 峰值：canny 255 / sobel 255；饱和幅值 > 40 的像素：canny 797 / sobel 515
+=== thin ===
+  延迟 14 拍（期望 14）  消隐期错误 0  行数 97 短0 长0  抓取 2048/2048
+  对齐偏移 (dr,dc) = (-3,0)（写死的流水线偏移）；比对 1188 点，失配 0 点
+  edge 比对 1040 点，失配 0 点（参考 = NMS + 双阈值滞后，thr 16/8）
+  link 比对 1040 点，失配 0 点（参考传播保留 0 点，link_en=0）
+  OK
+  阈值统计：mag8 >= 16 的像素 240 → 最终 edge 96 点（其中滞后连上的弱边 0 点）
+  mag 峰值：canny 255 / sobel 255；饱和幅值 > 40 的像素：canny 320 / sobel 192
+=== noise ===
+  延迟 14 拍（期望 14）  消隐期错误 0  行数 97 短0 长0  抓取 2048/2048
+  对齐偏移 (dr,dc) = (-3,0)（写死的流水线偏移）；比对 1188 点，失配 0 点
+  edge 比对 1040 点，失配 0 点（参考 = NMS + 双阈值滞后，thr 16/8）
+  link 比对 1040 点，失配 0 点（参考传播保留 0 点，link_en=0）
+  OK
+  阈值统计：mag8 >= 16 的像素 976 → 最终 edge 482 点（其中滞后连上的弱边 19 点）
+  mag 峰值：canny 255 / sobel 255；饱和幅值 > 40 的像素：canny 1975 / sobel 2034
+=== checker ===
+  延迟 14 拍（期望 14）  消隐期错误 0  行数 97 短0 长0  抓取 2048/2048
+  对齐偏移 (dr,dc) = (-3,0)（写死的流水线偏移）；比对 1188 点，失配 0 点
+  edge 比对 1040 点，失配 0 点（参考 = NMS + 双阈值滞后，thr 16/8）
+  link 比对 1040 点，失配 0 点（参考传播保留 0 点，link_en=0）
+  OK
+  阈值统计：mag8 >= 16 的像素 1344 → 最终 edge 336 点（其中滞后连上的弱边 0 点）
+  mag 峰值：canny 255 / sobel 255；饱和幅值 > 40 的像素：canny 2032 / sobel 1436
+=== step_v ===
+  延迟 14 拍（期望 14）  消隐期错误 0  行数 97 短0 长0  抓取 2048/2048
+  对齐偏移 (dr,dc) = (-3,0)（写死的流水线偏移）；比对 1188 点，失配 0 点
+  edge 比对 1040 点，失配 0 点（参考 = NMS + 双阈值滞后，thr 16/8）
+  link 比对 1040 点，失配 0 点（参考传播保留 0 点，link_en=0）
+  OK
+  阈值统计：mag8 >= 16 的像素 96 → 最终 edge 48 点（其中滞后连上的弱边 0 点）
+  边缘宽度（v 方向）：DUT 最大 2 像素 / 参考最大 2 像素
+  mag 峰值：canny 255 / sobel 255；饱和幅值 > 40 的像素：canny 128 / sobel 64
+=== step_h ===
+  延迟 14 拍（期望 14）  消隐期错误 0  行数 97 短0 长0  抓取 2048/2048
+  对齐偏移 (dr,dc) = (-3,0)（写死的流水线偏移）；比对 1188 点，失配 0 点
+  edge 比对 1040 点，失配 0 点（参考 = NMS + 双阈值滞后，thr 16/8）
+  link 比对 1040 点，失配 0 点（参考传播保留 0 点，link_en=0）
+  OK
+  阈值统计：mag8 >= 16 的像素 224 → 最终 edge 112 点（其中滞后连上的弱边 0 点）
+  边缘宽度（h 方向）：DUT 最大 2 像素 / 参考最大 2 像素
+  mag 峰值：canny 255 / sobel 255；饱和幅值 > 40 的像素：canny 256 / sobel 128
+=== step_45 ===
+  延迟 14 拍（期望 14）  消隐期错误 0  行数 97 短0 长0  抓取 2048/2048
+  对齐偏移 (dr,dc) = (-3,0)（写死的流水线偏移）；比对 1188 点，失配 0 点
+  edge 比对 1040 点，失配 0 点（参考 = NMS + 双阈值滞后，thr 16/8）
+  link 比对 1040 点，失配 0 点（参考传播保留 0 点，link_en=0）
+  OK
+  阈值统计：mag8 >= 16 的像素 141 → 最终 edge 48 点（其中滞后连上的弱边 0 点）
+  边缘宽度（45 方向）：DUT 最大 1 像素 / 参考最大 1 像素
+  mag 峰值：canny 255 / sobel 255；饱和幅值 > 40 的像素：canny 188 / sobel 126
+=== step_135 ===
+  延迟 14 拍（期望 14）  消隐期错误 0  行数 97 短0 长0  抓取 2048/2048
+  对齐偏移 (dr,dc) = (-3,0)（写死的流水线偏移）；比对 1188 点，失配 0 点
+  edge 比对 1040 点，失配 0 点（参考 = NMS + 双阈值滞后，thr 16/8）
+  link 比对 1040 点，失配 0 点（参考传播保留 0 点，link_en=0）
+  OK
+  阈值统计：mag8 >= 16 的像素 144 → 最终 edge 48 点（其中滞后连上的弱边 0 点）
+  边缘宽度（135 方向）：DUT 最大 1 像素 / 参考最大 1 像素
+  mag 峰值：canny 255 / sobel 255；饱和幅值 > 40 的像素：canny 190 / sobel 126
+=== faint_link ===
+  延迟 14 拍（期望 14）  消隐期错误 0  行数 97 短0 长0  抓取 2048/2048
+  对齐偏移 (dr,dc) = (-3,0)（写死的流水线偏移）；比对 1188 点，失配 0 点
+  edge 比对 1040 点，失配 0 点（参考 = NMS + 双阈值滞后，thr 16/8）
+  link 比对 1040 点，失配 0 点（参考传播保留 0 点，link_en=0）
+  OK
+  阈值统计：mag8 >= 16 的像素 158 → 最终 edge 77 点（其中滞后连上的弱边 2 点）
+  滞后行为（弱边接在强边上，link=0）：弱边候选 20 个 —— 贴强边 2 个（DUT 保留 2）；不贴强边 18 个（DUT 保留 0）
+  mag 峰值：canny 255 / sobel 255；饱和幅值 > 40 的像素：canny 220 / sobel 126
+=== faint_iso ===
+  延迟 14 拍（期望 14）  消隐期错误 0  行数 97 短0 长0  抓取 2048/2048
+  对齐偏移 (dr,dc) = (-3,0)（写死的流水线偏移）；比对 1188 点，失配 0 点
+  edge 比对 1040 点，失配 0 点（参考 = NMS + 双阈值滞后，thr 16/8）
+  link 比对 1040 点，失配 0 点（参考传播保留 0 点，link_en=0）
+  OK
+  阈值统计：mag8 >= 16 的像素 1 → 最终 edge 3 点（其中滞后连上的弱边 2 点）
+  滞后行为（孤立弱边，link=0）：弱边候选 74 个 —— 贴强边 2 个（DUT 保留 2）；不贴强边 72 个（DUT 保留 0）
+  mag 峰值：canny 132 / sobel 192；饱和幅值 > 40 的像素：canny 97 / sobel 96
+=== ladder ===
+  延迟 14 拍（期望 14）  消隐期错误 0  行数 97 短0 长0  抓取 2048/2048
+  对齐偏移 (dr,dc) = (-3,0)（写死的流水线偏移）；比对 1188 点，失配 0 点
+  edge 比对 1040 点，失配 0 点（参考 = NMS + 双阈值滞后，thr 16/8）
+  link 比对 1040 点，失配 0 点（参考传播保留 0 点，link_en=0）
+  OK
+  阈值统计：mag8 >= 16 的像素 720 → 最终 edge 504 点（其中滞后连上的弱边 0 点）
+  ΔY 阶梯规格（竖边界；出边行数 = 在边界 ±2 列内有 edge 的行数 / 总行数）
+    ΔY= 16  参考 mag8=  6  边界列  8  出边  0/18 行  最长连续 0
+    ΔY= 32  参考 mag8= 12  边界列 12  出边  0/18 行  最长连续 0
+    ΔY= 32  参考 mag8= 12  边界列 16  出边  0/18 行  最长连续 0
+    ΔY= 48  参考 mag8= 18  边界列 20  出边 18/18 行  最长连续 18
+    ΔY= 48  参考 mag8= 18  边界列 24  出边 18/18 行  最长连续 18
+    ΔY= 64  参考 mag8= 24  边界列 28  出边 18/18 行  最长连续 18
+    ΔY= 64  参考 mag8= 24  边界列 32  出边 18/18 行  最长连续 18
+    ΔY= 96  参考 mag8= 36  边界列 36  出边 18/18 行  最长连续 18
+    ΔY= 96  参考 mag8= 36  边界列 40  出边 18/18 行  最长连续 18
+    ΔY=128  参考 mag8= 48  边界列 44  出边 18/18 行  最长连续 18
+    ΔY=128  参考 mag8= 48  边界列 48  出边 18/18 行  最长连续 18
+    ΔY=160  参考 mag8= 60  边界列 52  出边 18/18 行  最长连续 18
+    ΔY=160  参考 mag8= 60  边界列 56  出边 18/18 行  最长连续 18
+  mag 峰值：canny 255 / sobel 255；饱和幅值 > 40 的像素：canny 1664 / sobel 960
+
+总计：13 个图样，失败 0 个
+=== impulse ===
+  延迟 14 拍（期望 14）  消隐期错误 0  行数 97 短0 长0  抓取 2048/2048
+  对齐偏移 (dr,dc) = (-3,0)（写死的流水线偏移）；比对 1188 点，失配 0 点
+  edge 比对 1040 点，失配 0 点（参考 = NMS + 双阈值滞后，thr 16/8）
+  link 比对 1040 点，失配 0 点（参考传播保留 0 点，link_en=0）
+  OK
+  阈值统计：mag8 >= 16 的像素 8 → 最终 edge 8 点（其中滞后连上的弱边 0 点）
+  mag 峰值：canny 255 / sobel 255；饱和幅值 > 40 的像素：canny 20 / sobel 8
+=== noise ===
+  延迟 14 拍（期望 14）  消隐期错误 0  行数 97 短0 长0  抓取 2048/2048
+  对齐偏移 (dr,dc) = (-3,0)（写死的流水线偏移）；比对 1188 点，失配 0 点
+  edge 比对 1040 点，失配 0 点（参考 = NMS + 双阈值滞后，thr 16/8）
+  link 比对 1040 点，失配 0 点（参考传播保留 0 点，link_en=0）
+  OK
+  阈值统计：mag8 >= 16 的像素 1181 → 最终 edge 496 点（其中滞后连上的弱边 0 点）
+  mag 峰值：canny 255 / sobel 255；饱和幅值 > 40 的像素：canny 2008 / sobel 2034
+=== thin ===
+  延迟 14 拍（期望 14）  消隐期错误 0  行数 97 短0 长0  抓取 2048/2048
+  对齐偏移 (dr,dc) = (-3,0)（写死的流水线偏移）；比对 1188 点，失配 0 点
+  edge 比对 1040 点，失配 0 点（参考 = NMS + 双阈值滞后，thr 16/8）
+  link 比对 1040 点，失配 0 点（参考传播保留 0 点，link_en=0）
+  OK
+  阈值统计：mag8 >= 16 的像素 144 → 最终 edge 96 点（其中滞后连上的弱边 0 点）
+  mag 峰值：canny 255 / sobel 255；饱和幅值 > 40 的像素：canny 320 / sobel 192
+
+总计：3 个图样，失败 0 个
+=== impulse ===
+  延迟 14 拍（期望 14）  消隐期错误 0  行数 97 短0 长0  抓取 2048/2048
+  对齐偏移 (dr,dc) = (-3,0)（写死的流水线偏移）；比对 1188 点，失配 0 点
+  edge 比对 1040 点，失配 0 点（参考 = NMS + 双阈值滞后，thr 16/8）
+  link 比对 1040 点，失配 0 点（参考传播保留 0 点，link_en=0）
+  OK
+  阈值统计：mag8 >= 16 的像素 8 → 最终 edge 8 点（其中滞后连上的弱边 0 点）
+  mag 峰值：canny 255 / sobel 255；饱和幅值 > 40 的像素：canny 8 / sobel 8
+=== noise ===
+  延迟 14 拍（期望 14）  消隐期错误 0  行数 97 短0 长0  抓取 2048/2048
+  对齐偏移 (dr,dc) = (-3,0)（写死的流水线偏移）；比对 1188 点，失配 0 点
+  edge 比对 1040 点，失配 0 点（参考 = NMS + 双阈值滞后，thr 16/8）
+  link 比对 1040 点，失配 0 点（参考传播保留 0 点，link_en=0）
+  OK
+  阈值统计：mag8 >= 16 的像素 1259 → 最终 edge 511 点（其中滞后连上的弱边 0 点）
+  mag 峰值：canny 255 / sobel 255；饱和幅值 > 40 的像素：canny 2034 / sobel 2034
+=== thin ===
+  延迟 14 拍（期望 14）  消隐期错误 0  行数 97 短0 长0  抓取 2048/2048
+  对齐偏移 (dr,dc) = (-3,0)（写死的流水线偏移）；比对 1188 点，失配 0 点
+  edge 比对 1040 点，失配 0 点（参考 = NMS + 双阈值滞后，thr 16/8）
+  link 比对 1040 点，失配 0 点（参考传播保留 0 点，link_en=0）
+  OK
+  阈值统计：mag8 >= 16 的像素 144 → 最终 edge 144 点（其中滞后连上的弱边 0 点）
+  mag 峰值：canny 255 / sobel 255；饱和幅值 > 40 的像素：canny 192 / sobel 192
+
+总计：3 个图样，失败 0 个
+=== uniform ===
+  延迟 14 拍（期望 14）  消隐期错误 0  行数 97 短0 长0  抓取 2048/2048
+  对齐偏移 (dr,dc) = (-3,0)（写死的流水线偏移）；比对 1188 点，失配 0 点
+  edge 比对 1040 点，失配 0 点（参考 = NMS + 双阈值滞后 + 流式反馈，thr 16/8）
+  link 比对 1040 点，失配 0 点（参考传播保留 0 点，link_en=1）
+  OK
+  阈值统计：mag8 >= 16 的像素 0 → 最终 edge 0 点（其中滞后连上的弱边 0 点）
+  边界自检（均匀场，第 6 行起）：内部（第 4..61 列）mag!=0 的点 0；整幅 edge 0 点
+    边界区第 62 列：26 个点非零，取值 [32]
+    边界区第 63 列：26 个点非零，取值 [16]
+  mag 峰值：canny 0 / sobel 0；饱和幅值 > 40 的像素：canny 0 / sobel 0
+=== impulse ===
+  延迟 14 拍（期望 14）  消隐期错误 0  行数 97 短0 长0  抓取 2048/2048
+  对齐偏移 (dr,dc) = (-3,0)（写死的流水线偏移）；比对 1188 点，失配 0 点
+  edge 比对 1040 点，失配 0 点（参考 = NMS + 双阈值滞后 + 流式反馈，thr 16/8）
+  link 比对 1040 点，失配 0 点（参考传播保留 0 点，link_en=1）
+  OK
+  阈值统计：mag8 >= 16 的像素 8 → 最终 edge 12 点（其中滞后连上的弱边 4 点）
+  mag 峰值：canny 250 / sobel 255；饱和幅值 > 40 的像素：canny 20 / sobel 8
+=== lines ===
+  延迟 14 拍（期望 14）  消隐期错误 0  行数 97 短0 长0  抓取 2048/2048
+  对齐偏移 (dr,dc) = (-3,0)（写死的流水线偏移）；比对 1188 点，失配 0 点
+  edge 比对 1040 点，失配 0 点（参考 = NMS + 双阈值滞后 + 流式反馈，thr 16/8）
+  link 比对 1040 点，失配 0 点（参考传播保留 0 点，link_en=1）
+  OK
+  阈值统计：mag8 >= 16 的像素 564 → 最终 edge 338 点（其中滞后连上的弱边 0 点）
+  mag 峰值：canny 255 / sobel 255；饱和幅值 > 40 的像素：canny 797 / sobel 515
+=== thin ===
+  延迟 14 拍（期望 14）  消隐期错误 0  行数 97 短0 长0  抓取 2048/2048
+  对齐偏移 (dr,dc) = (-3,0)（写死的流水线偏移）；比对 1188 点，失配 0 点
+  edge 比对 1040 点，失配 0 点（参考 = NMS + 双阈值滞后 + 流式反馈，thr 16/8）
+  link 比对 1040 点，失配 0 点（参考传播保留 0 点，link_en=1）
+  OK
+  阈值统计：mag8 >= 16 的像素 240 → 最终 edge 96 点（其中滞后连上的弱边 0 点）
+  mag 峰值：canny 255 / sobel 255；饱和幅值 > 40 的像素：canny 320 / sobel 192
+=== noise ===
+  延迟 14 拍（期望 14）  消隐期错误 0  行数 97 短0 长0  抓取 2048/2048
+  对齐偏移 (dr,dc) = (-3,0)（写死的流水线偏移）；比对 1188 点，失配 0 点
+  edge 比对 1040 点，失配 0 点（参考 = NMS + 双阈值滞后 + 流式反馈，thr 16/8）
+  link 比对 1040 点，失配 0 点（参考传播保留 1 点，link_en=1）
+  OK
+  阈值统计：mag8 >= 16 的像素 976 → 最终 edge 482 点（其中滞后连上的弱边 19 点）
+  mag 峰值：canny 255 / sobel 255；饱和幅值 > 40 的像素：canny 1975 / sobel 2034
+=== checker ===
+  延迟 14 拍（期望 14）  消隐期错误 0  行数 97 短0 长0  抓取 2048/2048
+  对齐偏移 (dr,dc) = (-3,0)（写死的流水线偏移）；比对 1188 点，失配 0 点
+  edge 比对 1040 点，失配 0 点（参考 = NMS + 双阈值滞后 + 流式反馈，thr 16/8）
+  link 比对 1040 点，失配 0 点（参考传播保留 0 点，link_en=1）
+  OK
+  阈值统计：mag8 >= 16 的像素 1344 → 最终 edge 336 点（其中滞后连上的弱边 0 点）
+  mag 峰值：canny 255 / sobel 255；饱和幅值 > 40 的像素：canny 2032 / sobel 1436
+=== step_v ===
+  延迟 14 拍（期望 14）  消隐期错误 0  行数 97 短0 长0  抓取 2048/2048
+  对齐偏移 (dr,dc) = (-3,0)（写死的流水线偏移）；比对 1188 点，失配 0 点
+  edge 比对 1040 点，失配 0 点（参考 = NMS + 双阈值滞后 + 流式反馈，thr 16/8）
+  link 比对 1040 点，失配 0 点（参考传播保留 0 点，link_en=1）
+  OK
+  阈值统计：mag8 >= 16 的像素 96 → 最终 edge 48 点（其中滞后连上的弱边 0 点）
+  边缘宽度（v 方向）：DUT 最大 2 像素 / 参考最大 2 像素
+  mag 峰值：canny 255 / sobel 255；饱和幅值 > 40 的像素：canny 128 / sobel 64
+=== step_h ===
+  延迟 14 拍（期望 14）  消隐期错误 0  行数 97 短0 长0  抓取 2048/2048
+  对齐偏移 (dr,dc) = (-3,0)（写死的流水线偏移）；比对 1188 点，失配 0 点
+  edge 比对 1040 点，失配 0 点（参考 = NMS + 双阈值滞后 + 流式反馈，thr 16/8）
+  link 比对 1040 点，失配 0 点（参考传播保留 0 点，link_en=1）
+  OK
+  阈值统计：mag8 >= 16 的像素 224 → 最终 edge 112 点（其中滞后连上的弱边 0 点）
+  边缘宽度（h 方向）：DUT 最大 2 像素 / 参考最大 2 像素
+  mag 峰值：canny 255 / sobel 255；饱和幅值 > 40 的像素：canny 256 / sobel 128
+=== step_45 ===
+  延迟 14 拍（期望 14）  消隐期错误 0  行数 97 短0 长0  抓取 2048/2048
+  对齐偏移 (dr,dc) = (-3,0)（写死的流水线偏移）；比对 1188 点，失配 0 点
+  edge 比对 1040 点，失配 0 点（参考 = NMS + 双阈值滞后 + 流式反馈，thr 16/8）
+  link 比对 1040 点，失配 0 点（参考传播保留 0 点，link_en=1）
+  OK
+  阈值统计：mag8 >= 16 的像素 141 → 最终 edge 48 点（其中滞后连上的弱边 0 点）
+  边缘宽度（45 方向）：DUT 最大 1 像素 / 参考最大 1 像素
+  mag 峰值：canny 255 / sobel 255；饱和幅值 > 40 的像素：canny 188 / sobel 126
+=== step_135 ===
+  延迟 14 拍（期望 14）  消隐期错误 0  行数 97 短0 长0  抓取 2048/2048
+  对齐偏移 (dr,dc) = (-3,0)（写死的流水线偏移）；比对 1188 点，失配 0 点
+  edge 比对 1040 点，失配 0 点（参考 = NMS + 双阈值滞后 + 流式反馈，thr 16/8）
+  link 比对 1040 点，失配 0 点（参考传播保留 0 点，link_en=1）
+  OK
+  阈值统计：mag8 >= 16 的像素 144 → 最终 edge 48 点（其中滞后连上的弱边 0 点）
+  边缘宽度（135 方向）：DUT 最大 1 像素 / 参考最大 1 像素
+  mag 峰值：canny 255 / sobel 255；饱和幅值 > 40 的像素：canny 190 / sobel 126
+=== faint_link ===
+  延迟 14 拍（期望 14）  消隐期错误 0  行数 97 短0 长0  抓取 2048/2048
+  对齐偏移 (dr,dc) = (-3,0)（写死的流水线偏移）；比对 1188 点，失配 0 点
+  edge 比对 1040 点，失配 0 点（参考 = NMS + 双阈值滞后 + 流式反馈，thr 16/8）
+  link 比对 1040 点，失配 0 点（参考传播保留 26 点，link_en=1）
+  OK
+  阈值统计：mag8 >= 16 的像素 158 → 最终 edge 95 点（其中滞后连上的弱边 20 点）
+  滞后行为（弱边接在强边上，link=1）：弱边候选 20 个 —— 贴强边 2 个（DUT 保留 2）；不贴强边 18 个（DUT 保留 18）
+  mag 峰值：canny 255 / sobel 255；饱和幅值 > 40 的像素：canny 220 / sobel 126
+=== faint_iso ===
+  延迟 14 拍（期望 14）  消隐期错误 0  行数 97 短0 长0  抓取 2048/2048
+  对齐偏移 (dr,dc) = (-3,0)（写死的流水线偏移）；比对 1188 点，失配 0 点
+  edge 比对 1040 点，失配 0 点（参考 = NMS + 双阈值滞后 + 流式反馈，thr 16/8）
+  link 比对 1040 点，失配 0 点（参考传播保留 42 点，link_en=1）
+  OK
+  阈值统计：mag8 >= 16 的像素 1 → 最终 edge 39 点（其中滞后连上的弱边 38 点）
+  滞后行为（孤立弱边，link=1）：弱边候选 74 个 —— 贴强边 2 个（DUT 保留 2）；不贴强边 72 个（DUT 保留 36）
+  mag 峰值：canny 132 / sobel 192；饱和幅值 > 40 的像素：canny 97 / sobel 96
+=== ladder ===
+  延迟 14 拍（期望 14）  消隐期错误 0  行数 97 短0 长0  抓取 2048/2048
+  对齐偏移 (dr,dc) = (-3,0)（写死的流水线偏移）；比对 1188 点，失配 0 点
+  edge 比对 1040 点，失配 0 点（参考 = NMS + 双阈值滞后 + 流式反馈，thr 16/8）
+  link 比对 1040 点，失配 0 点（参考传播保留 0 点，link_en=1）
+  OK
+  阈值统计：mag8 >= 16 的像素 720 → 最终 edge 504 点（其中滞后连上的弱边 0 点）
+  ΔY 阶梯规格（竖边界；出边行数 = 在边界 ±2 列内有 edge 的行数 / 总行数）
+    ΔY= 16  参考 mag8=  6  边界列  8  出边  0/18 行  最长连续 0
+    ΔY= 32  参考 mag8= 12  边界列 12  出边  0/18 行  最长连续 0
+    ΔY= 32  参考 mag8= 12  边界列 16  出边  0/18 行  最长连续 0
+    ΔY= 48  参考 mag8= 18  边界列 20  出边 18/18 行  最长连续 18
+    ΔY= 48  参考 mag8= 18  边界列 24  出边 18/18 行  最长连续 18
+    ΔY= 64  参考 mag8= 24  边界列 28  出边 18/18 行  最长连续 18
+    ΔY= 64  参考 mag8= 24  边界列 32  出边 18/18 行  最长连续 18
+    ΔY= 96  参考 mag8= 36  边界列 36  出边 18/18 行  最长连续 18
+    ΔY= 96  参考 mag8= 36  边界列 40  出边 18/18 行  最长连续 18
+    ΔY=128  参考 mag8= 48  边界列 44  出边 18/18 行  最长连续 18
+    ΔY=128  参考 mag8= 48  边界列 48  出边 18/18 行  最长连续 18
+    ΔY=160  参考 mag8= 60  边界列 52  出边 18/18 行  最长连续 18
+    ΔY=160  参考 mag8= 60  边界列 56  出边 18/18 行  最长连续 18
+  mag 峰值：canny 255 / sobel 255；饱和幅值 > 40 的像素：canny 1664 / sobel 960
+
+总计：13 个图样，失败 0 个
+make: Entering directory '/mnt/d/fpga4/07-FPGA_HDL_Image-2023.2/07-1_Ti60_SC1336_HDMI_1280720/sim/build/obj_top'
+make: Nothing to be done for 'default'.
+make: Leaving directory '/mnt/d/fpga4/07-FPGA_HDL_Image-2023.2/07-1_Ti60_SC1336_HDMI_1280720/sim/build/obj_top'
+- V e r i l a t i o n   R e p o r t: Verilator 5.029 devel rev v5.028-218-g81ee89de1
+- Verilator: Built from 0.000 MB sources in 0 modules, into 0.000 MB in 0 C++ files needing 0.000 MB
+- Verilator: Walltime 0.150 s (elab=0.000, cvt=0.000, bld=0.058); cpu 0.009 s on 1 threads; alloced 19.082 MB
+  checker      OK
+  faint_iso    OK
+  faint_link   OK
+  impulse      OK
+  ladder       OK
+  lines        OK
+  noise        OK
+  step_135     OK
+  step_45      OK
+  step_h       OK
+  step_v       OK
+  thin         OK
+  uniform      OK
+顶层集成（tb_pipeline_top）：13 个图样通过，0 个失败
+make: Entering directory '/mnt/d/fpga4/07-FPGA_HDL_Image-2023.2/07-1_Ti60_SC1336_HDMI_1280720/sim/build/obj_gray'
+make: Nothing to be done for 'default'.
+make: Leaving directory '/mnt/d/fpga4/07-FPGA_HDL_Image-2023.2/07-1_Ti60_SC1336_HDMI_1280720/sim/build/obj_gray'
+- V e r i l a t i o n   R e p o r t: Verilator 5.029 devel rev v5.028-218-g81ee89de1
+- Verilator: Built from 0.000 MB sources in 0 modules, into 0.000 MB in 0 C++ files needing 0.000 MB
+- Verilator: Walltime 0.110 s (elab=0.000, cvt=0.000, bld=0.059); cpu 0.004 s on 1 threads; alloced 19.078 MB
+  A 组（定点字面值）：10 个用例，累计错误 0
+  B 组（BT.601 容差 ±1.5，64 个组合）：累计错误 0
+RGB2GRAY PASS（75 个用例，0 错误）
+- sim/tb_rgb_to_gray.v:142: Verilog $finish
+- S i m u l a t i o n   R e p o r t: Verilator 5.029 devel
+- Verilator: $finish at 810ns; walltime 0.001 s; speed 444.200 us/s
+- Verilator: cpu 0.002 s on 1 threads; alloced 137 MB
+make: Entering directory '/mnt/d/fpga4/07-FPGA_HDL_Image-2023.2/07-1_Ti60_SC1336_HDMI_1280720/sim/build/obj_uart'
+g++ -Os  -I.  -MMD -I/usr/local/share/verilator/include -I/usr/local/share/verilator/include/vltstd -DVM_COVERAGE=0 -DVM_SC=0 -DVM_TIMING=1 -DVM_TRACE=0 -DVM_TRACE_FST=0 -DVM_TRACE_VCD=0 -faligned-new -fcf-protection=none -Wno-bool-operation -Wno-shadow -Wno-sign-compare -Wno-tautological-compare -Wno-uninitialized -Wno-unused-but-set-parameter -Wno-unused-but-set-variable -Wno-unused-parameter -Wno-unused-variable    -DVL_TIME_CONTEXT   -fcoroutines -c -o verilated.o /usr/local/share/verilator/include/verilated.cpp
+g++ -Os  -I.  -MMD -I/usr/local/share/verilator/include -I/usr/local/share/verilator/include/vltstd -DVM_COVERAGE=0 -DVM_SC=0 -DVM_TIMING=1 -DVM_TRACE=0 -DVM_TRACE_FST=0 -DVM_TRACE_VCD=0 -faligned-new -fcf-protection=none -Wno-bool-operation -Wno-shadow -Wno-sign-compare -Wno-tautological-compare -Wno-uninitialized -Wno-unused-but-set-parameter -Wno-unused-but-set-variable -Wno-unused-parameter -Wno-unused-variable    -DVL_TIME_CONTEXT   -fcoroutines -c -o verilated_timing.o /usr/local/share/verilator/include/verilated_timing.cpp
+g++ -Os  -I.  -MMD -I/usr/local/share/verilator/include -I/usr/local/share/verilator/include/vltstd -DVM_COVERAGE=0 -DVM_SC=0 -DVM_TIMING=1 -DVM_TRACE=0 -DVM_TRACE_FST=0 -DVM_TRACE_VCD=0 -faligned-new -fcf-protection=none -Wno-bool-operation -Wno-shadow -Wno-sign-compare -Wno-tautological-compare -Wno-uninitialized -Wno-unused-but-set-parameter -Wno-unused-but-set-variable -Wno-unused-parameter -Wno-unused-variable    -DVL_TIME_CONTEXT   -fcoroutines -c -o verilated_threads.o /usr/local/share/verilator/include/verilated_threads.cpp
+g++ -Os  -I.  -MMD -I/usr/local/share/verilator/include -I/usr/local/share/verilator/include/vltstd -DVM_COVERAGE=0 -DVM_SC=0 -DVM_TIMING=1 -DVM_TRACE=0 -DVM_TRACE_FST=0 -DVM_TRACE_VCD=0 -faligned-new -fcf-protection=none -Wno-bool-operation -Wno-shadow -Wno-sign-compare -Wno-tautological-compare -Wno-uninitialized -Wno-unused-but-set-parameter -Wno-unused-but-set-variable -Wno-unused-parameter -Wno-unused-variable    -DVL_TIME_CONTEXT   -fcoroutines -x c++-header Vtb_uart_cmd__pch.h -o Vtb_uart_cmd__pch.h.fast.gch
+g++ -Os  -I.  -MMD -I/usr/local/share/verilator/include -I/usr/local/share/verilator/include/vltstd -DVM_COVERAGE=0 -DVM_SC=0 -DVM_TIMING=1 -DVM_TRACE=0 -DVM_TRACE_FST=0 -DVM_TRACE_VCD=0 -faligned-new -fcf-protection=none -Wno-bool-operation -Wno-shadow -Wno-sign-compare -Wno-tautological-compare -Wno-uninitialized -Wno-unused-but-set-parameter -Wno-unused-but-set-variable -Wno-unused-parameter -Wno-unused-variable    -DVL_TIME_CONTEXT   -fcoroutines -include Vtb_uart_cmd__pch.h.fast -c -o Vtb_uart_cmd.o Vtb_uart_cmd.cpp
+g++ -Os  -I.  -MMD -I/usr/local/share/verilator/include -I/usr/local/share/verilator/include/vltstd -DVM_COVERAGE=0 -DVM_SC=0 -DVM_TIMING=1 -DVM_TRACE=0 -DVM_TRACE_FST=0 -DVM_TRACE_VCD=0 -faligned-new -fcf-protection=none -Wno-bool-operation -Wno-shadow -Wno-sign-compare -Wno-tautological-compare -Wno-uninitialized -Wno-unused-but-set-parameter -Wno-unused-but-set-variable -Wno-unused-parameter -Wno-unused-variable    -DVL_TIME_CONTEXT   -fcoroutines -include Vtb_uart_cmd__pch.h.fast -c -o Vtb_uart_cmd___024root__DepSet_h3e92ac65__0.o Vtb_uart_cmd___024root__DepSet_h3e92ac65__0.cpp
+g++ -Os  -I.  -MMD -I/usr/local/share/verilator/include -I/usr/local/share/verilator/include/vltstd -DVM_COVERAGE=0 -DVM_SC=0 -DVM_TIMING=1 -DVM_TRACE=0 -DVM_TRACE_FST=0 -DVM_TRACE_VCD=0 -faligned-new -fcf-protection=none -Wno-bool-operation -Wno-shadow -Wno-sign-compare -Wno-tautological-compare -Wno-uninitialized -Wno-unused-but-set-parameter -Wno-unused-but-set-variable -Wno-unused-parameter -Wno-unused-variable    -DVL_TIME_CONTEXT   -fcoroutines -include Vtb_uart_cmd__pch.h.fast -c -o Vtb_uart_cmd___024root__DepSet_h19d6cfcf__0.o Vtb_uart_cmd___024root__DepSet_h19d6cfcf__0.cpp
+g++ -Os  -I.  -MMD -I/usr/local/share/verilator/include -I/usr/local/share/verilator/include/vltstd -DVM_COVERAGE=0 -DVM_SC=0 -DVM_TIMING=1 -DVM_TRACE=0 -DVM_TRACE_FST=0 -DVM_TRACE_VCD=0 -faligned-new -fcf-protection=none -Wno-bool-operation -Wno-shadow -Wno-sign-compare -Wno-tautological-compare -Wno-uninitialized -Wno-unused-but-set-parameter -Wno-unused-but-set-variable -Wno-unused-parameter -Wno-unused-variable    -DVL_TIME_CONTEXT   -fcoroutines -include Vtb_uart_cmd__pch.h.fast -c -o Vtb_uart_cmd___024root__DepSet_h19d6cfcf__1.o Vtb_uart_cmd___024root__DepSet_h19d6cfcf__1.cpp
+g++ -Os  -I.  -MMD -I/usr/local/share/verilator/include -I/usr/local/share/verilator/include/vltstd -DVM_COVERAGE=0 -DVM_SC=0 -DVM_TIMING=1 -DVM_TRACE=0 -DVM_TRACE_FST=0 -DVM_TRACE_VCD=0 -faligned-new -fcf-protection=none -Wno-bool-operation -Wno-shadow -Wno-sign-compare -Wno-tautological-compare -Wno-uninitialized -Wno-unused-but-set-parameter -Wno-unused-but-set-variable -Wno-unused-parameter -Wno-unused-variable    -DVL_TIME_CONTEXT   -fcoroutines -include Vtb_uart_cmd__pch.h.fast -c -o Vtb_uart_cmd___024root__DepSet_h19d6cfcf__2.o Vtb_uart_cmd___024root__DepSet_h19d6cfcf__2.cpp
+g++ -Os  -I.  -MMD -I/usr/local/share/verilator/include -I/usr/local/share/verilator/include/vltstd -DVM_COVERAGE=0 -DVM_SC=0 -DVM_TIMING=1 -DVM_TRACE=0 -DVM_TRACE_FST=0 -DVM_TRACE_VCD=0 -faligned-new -fcf-protection=none -Wno-bool-operation -Wno-shadow -Wno-sign-compare -Wno-tautological-compare -Wno-uninitialized -Wno-unused-but-set-parameter -Wno-unused-but-set-variable -Wno-unused-parameter -Wno-unused-variable    -DVL_TIME_CONTEXT   -fcoroutines -include Vtb_uart_cmd__pch.h.fast -c -o Vtb_uart_cmd__main.o Vtb_uart_cmd__main.cpp
+g++   -I.  -MMD -I/usr/local/share/verilator/include -I/usr/local/share/verilator/include/vltstd -DVM_COVERAGE=0 -DVM_SC=0 -DVM_TIMING=1 -DVM_TRACE=0 -DVM_TRACE_FST=0 -DVM_TRACE_VCD=0 -faligned-new -fcf-protection=none -Wno-bool-operation -Wno-shadow -Wno-sign-compare -Wno-tautological-compare -Wno-uninitialized -Wno-unused-but-set-parameter -Wno-unused-but-set-variable -Wno-unused-parameter -Wno-unused-variable    -DVL_TIME_CONTEXT   -fcoroutines -x c++-header Vtb_uart_cmd__pch.h -o Vtb_uart_cmd__pch.h.slow.gch
+g++   -I.  -MMD -I/usr/local/share/verilator/include -I/usr/local/share/verilator/include/vltstd -DVM_COVERAGE=0 -DVM_SC=0 -DVM_TIMING=1 -DVM_TRACE=0 -DVM_TRACE_FST=0 -DVM_TRACE_VCD=0 -faligned-new -fcf-protection=none -Wno-bool-operation -Wno-shadow -Wno-sign-compare -Wno-tautological-compare -Wno-uninitialized -Wno-unused-but-set-parameter -Wno-unused-but-set-variable -Wno-unused-parameter -Wno-unused-variable    -DVL_TIME_CONTEXT   -fcoroutines -include Vtb_uart_cmd__pch.h.slow -c -o Vtb_uart_cmd__ConstPool_0.o Vtb_uart_cmd__ConstPool_0.cpp
+g++   -I.  -MMD -I/usr/local/share/verilator/include -I/usr/local/share/verilator/include/vltstd -DVM_COVERAGE=0 -DVM_SC=0 -DVM_TIMING=1 -DVM_TRACE=0 -DVM_TRACE_FST=0 -DVM_TRACE_VCD=0 -faligned-new -fcf-protection=none -Wno-bool-operation -Wno-shadow -Wno-sign-compare -Wno-tautological-compare -Wno-uninitialized -Wno-unused-but-set-parameter -Wno-unused-but-set-variable -Wno-unused-parameter -Wno-unused-variable    -DVL_TIME_CONTEXT   -fcoroutines -include Vtb_uart_cmd__pch.h.slow -c -o Vtb_uart_cmd___024root__Slow.o Vtb_uart_cmd___024root__Slow.cpp
+g++   -I.  -MMD -I/usr/local/share/verilator/include -I/usr/local/share/verilator/include/vltstd -DVM_COVERAGE=0 -DVM_SC=0 -DVM_TIMING=1 -DVM_TRACE=0 -DVM_TRACE_FST=0 -DVM_TRACE_VCD=0 -faligned-new -fcf-protection=none -Wno-bool-operation -Wno-shadow -Wno-sign-compare -Wno-tautological-compare -Wno-uninitialized -Wno-unused-but-set-parameter -Wno-unused-but-set-variable -Wno-unused-parameter -Wno-unused-variable    -DVL_TIME_CONTEXT   -fcoroutines -include Vtb_uart_cmd__pch.h.slow -c -o Vtb_uart_cmd___024root__DepSet_h3e92ac65__0__Slow.o Vtb_uart_cmd___024root__DepSet_h3e92ac65__0__Slow.cpp
+g++   -I.  -MMD -I/usr/local/share/verilator/include -I/usr/local/share/verilator/include/vltstd -DVM_COVERAGE=0 -DVM_SC=0 -DVM_TIMING=1 -DVM_TRACE=0 -DVM_TRACE_FST=0 -DVM_TRACE_VCD=0 -faligned-new -fcf-protection=none -Wno-bool-operation -Wno-shadow -Wno-sign-compare -Wno-tautological-compare -Wno-uninitialized -Wno-unused-but-set-parameter -Wno-unused-but-set-variable -Wno-unused-parameter -Wno-unused-variable    -DVL_TIME_CONTEXT   -fcoroutines -include Vtb_uart_cmd__pch.h.slow -c -o Vtb_uart_cmd___024root__DepSet_h19d6cfcf__0__Slow.o Vtb_uart_cmd___024root__DepSet_h19d6cfcf__0__Slow.cpp
+g++   -I.  -MMD -I/usr/local/share/verilator/include -I/usr/local/share/verilator/include/vltstd -DVM_COVERAGE=0 -DVM_SC=0 -DVM_TIMING=1 -DVM_TRACE=0 -DVM_TRACE_FST=0 -DVM_TRACE_VCD=0 -faligned-new -fcf-protection=none -Wno-bool-operation -Wno-shadow -Wno-sign-compare -Wno-tautological-compare -Wno-uninitialized -Wno-unused-but-set-parameter -Wno-unused-but-set-variable -Wno-unused-parameter -Wno-unused-variable    -DVL_TIME_CONTEXT   -fcoroutines -include Vtb_uart_cmd__pch.h.slow -c -o Vtb_uart_cmd__Syms.o Vtb_uart_cmd__Syms.cpp
+echo "" > Vtb_uart_cmd__ALL.verilator_deplist.tmp
+g++    verilated.o verilated_timing.o verilated_threads.o Vtb_uart_cmd__ALL.a    -pthread -lpthread -latomic   -o Vtb_uart_cmd
+rm Vtb_uart_cmd__ALL.verilator_deplist.tmp
+make: Leaving directory '/mnt/d/fpga4/07-FPGA_HDL_Image-2023.2/07-1_Ti60_SC1336_HDMI_1280720/sim/build/obj_uart'
+- V e r i l a t i o n   R e p o r t: Verilator 5.029 devel rev v5.028-218-g81ee89de1
+- Verilator: Built from 0.061 MB sources in 3 modules, into 1.430 MB in 11 C++ files needing 0.000 MB
+- Verilator: Walltime 122.800 s (elab=0.006, cvt=0.300, bld=122.246); cpu 0.345 s on 1 threads; alloced 77.469 MB
+UART_CMD PASS（78 个用例，0 错误）
+- sim/tb_uart_cmd.v:467: Verilog $finish
+- S i m u l a t i o n   R e p o r t: Verilator 5.029 devel
+- Verilator: $finish at 4ms; walltime 0.131 s; speed 28.326 ms/s
+- Verilator: cpu 0.126 s on 1 threads; alloced 137 MB
+make: Entering directory '/mnt/d/fpga4/07-FPGA_HDL_Image-2023.2/07-1_Ti60_SC1336_HDMI_1280720/sim/build/obj_thr_key'
+make: Nothing to be done for 'default'.
+make: Leaving directory '/mnt/d/fpga4/07-FPGA_HDL_Image-2023.2/07-1_Ti60_SC1336_HDMI_1280720/sim/build/obj_thr_key'
+- V e r i l a t i o n   R e p o r t: Verilator 5.029 devel rev v5.028-218-g81ee89de1
+- Verilator: Built from 0.000 MB sources in 0 modules, into 0.000 MB in 0 C++ files needing 0.000 MB
+- Verilator: Walltime 0.188 s (elab=0.000, cvt=0.000, bld=0.114); cpu 0.008 s on 1 threads; alloced 19.078 MB
+  （实际延迟 1485003 拍 = 20.000 ms，期望 1485002 拍 = 20.000 ms）
+CANNY_THR_KEY PASS（63 个用例，0 错误）
+- sim/tb_canny_thr_key.v:397: Verilog $finish
+- S i m u l a t i o n   R e p o r t: Verilator 5.029 devel
+- Verilator: $finish at 30ms; walltime 2.218 s; speed 13.555 ms/s
+- Verilator: cpu 2.215 s on 1 threads; alloced 137 MB
+按键阈值控制器（tb_canny_thr_key）：PASS
+make: Entering directory '/mnt/d/fpga4/07-FPGA_HDL_Image-2023.2/07-1_Ti60_SC1336_HDMI_1280720/sim/build/obj_hist'
+make: Nothing to be done for 'default'.
+make: Leaving directory '/mnt/d/fpga4/07-FPGA_HDL_Image-2023.2/07-1_Ti60_SC1336_HDMI_1280720/sim/build/obj_hist'
+- V e r i l a t i o n   R e p o r t: Verilator 5.029 devel rev v5.028-218-g81ee89de1
+- Verilator: Built from 0.000 MB sources in 0 modules, into 0.000 MB in 0 C++ files needing 0.000 MB
+- Verilator: Walltime 0.132 s (elab=0.000, cvt=0.000, bld=0.059); cpu 0.007 s on 1 threads; alloced 19.082 MB
+tb_gray_hist_uart: DIV=16, frame=408 cycles, stream=778 bytes
+GRAY_HIST_UART PASS
+- sim/tb_gray_hist_uart.v:299: Verilog $finish
+- S i m u l a t i o n   R e p o r t: Verilator 5.029 devel
+- Verilator: $finish at 16ms; walltime 0.149 s; speed 107.570 ms/s
+- Verilator: cpu 0.150 s on 1 threads; alloced 137 MB
+片内直方图（tb_gray_hist_uart）：PASS
+make: Entering directory '/mnt/d/fpga4/07-FPGA_HDL_Image-2023.2/07-1_Ti60_SC1336_HDMI_1280720/sim/build/obj_median'
+make: Nothing to be done for 'default'.
+make: Leaving directory '/mnt/d/fpga4/07-FPGA_HDL_Image-2023.2/07-1_Ti60_SC1336_HDMI_1280720/sim/build/obj_median'
+- V e r i l a t i o n   R e p o r t: Verilator 5.029 devel rev v5.028-218-g81ee89de1
+- Verilator: Built from 0.000 MB sources in 0 modules, into 0.000 MB in 0 C++ files needing 0.000 MB
+- Verilator: Walltime 0.125 s (elab=0.000, cvt=0.000, bld=0.063); cpu 0.006 s on 1 threads; alloced 19.082 MB
+MEDIAN PASS（28 个用例，0 错误）
+- sim/tb_median_filter_3x3.v:169: Verilog $finish
+- S i m u l a t i o n   R e p o r t: Verilator 5.029 devel
+- Verilator: $finish at 190ns; walltime 0.001 s; speed 114.666 us/s
+- Verilator: cpu 0.002 s on 1 threads; alloced 137 MB
+中值滤波单元（tb_median_filter_3x3）：PASS

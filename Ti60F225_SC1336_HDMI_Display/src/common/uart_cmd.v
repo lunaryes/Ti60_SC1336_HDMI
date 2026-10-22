@@ -1,4 +1,8 @@
 `timescale 1ns / 1ps
+// Application update (2026-10-22): P/N/J/K/O/F control DDR frames, Q returns
+// application configuration, D requests atomic frame status. See
+// docs/DDR_VIDEO_STORE.md. H is disabled by default; historical notes below
+// describe standalone diagnostic use, not the current application top level.
 //=====================================================================
 // uart_cmd —— 极简串口命令接口（M5，排查 Canny 阈值标定问题时加的）
 //---------------------------------------------------------------------
@@ -77,6 +81,7 @@
 module uart_cmd #(
     parameter integer CLK_FREQ = 74250000,   // clk_pixel
     parameter integer BAUD     = 460800,
+    parameter integer ENABLE_DIAGNOSTICS = 0,
     parameter [7:0]   THR_DEF  = 8'd16,      // = example_top 的 IMG_THR 默认值
     parameter [1:0]   VIEW_DEF = 2'd0,
     parameter [1:0]   MODE_DEF = 2'd3,
@@ -109,6 +114,16 @@ module uart_cmd #(
     output reg  [7:0] gain_b_o,
 
     // M6 增量端口（只增不改）：直方图请求与 TX 忙标志
+    output reg [2:0] play_mode_o,
+    output reg tnr_enable_o,
+    output reg [3:0] age_a_o,age_b_o,
+    output reg [7:0] replay_div_o,
+    output reg status_req_o,
+    input wire status_valid_i,
+    input wire [31:0] app_status_i,
+    output reg history_req_o,input wire history_valid_i,
+    input wire [31:0] history_status_i,strong_pixels_i,weak_pixels_i,bypass_pixels_i,
+    output reg [63:0] iir_tuning_o,
     output reg        hist_req_o,   // 收到 'H' 的单拍脉冲
     output wire       tx_busy_o     // TX 状态机忙（含已排队的 tx_req）
 );
@@ -195,9 +210,11 @@ module uart_cmd #(
     //-----------------------------------------------------------------
     localparam [7:0] C_T = 8'h54, C_V = 8'h56, C_M = 8'h4D, C_R = 8'h52,
                      C_A = 8'h41, C_B = 8'h42, C_H = 8'h48, C_S = 8'h53,
-                     C_L = 8'h4C, C_Q=8'h51;
+                     C_L = 8'h4C, C_Q=8'h51, C_P=8'h50, C_N=8'h4e, C_J=8'h4a, C_K=8'h4b, C_O=8'h4f, C_F=8'h46, C_D=8'h44;
 
     reg       p_wait;                 // 正在等参数字节
+    reg [31:0] snapshot_strong,snapshot_weak,snapshot_bypass;
+    reg [7:0] iir_index;
     reg [7:0] p_cmd;
     reg       tx_req;
     reg [7:0] tx_d [0:7];             // 8 字节 {thr,view,mode,gain_r,gain_b,smooth,link,'\n'}
@@ -217,28 +234,57 @@ module uart_cmd #(
             p_cmd      <= 8'd0;
             tx_req     <= 1'b0;
             hist_req_o <= 1'b0;
+            play_mode_o<=0;tnr_enable_o<=1;age_a_o<=0;age_b_o<=1;replay_div_o<=2;status_req_o<=0;history_req_o<=0;
+            snapshot_strong<=0;snapshot_weak<=0;snapshot_bypass<=0;
+            iir_tuning_o<=64'h0818080405020201;iir_index<=0;
         end else begin
             tx_req      <= 1'b0;
             hist_req_o  <= 1'b0;
+            status_req_o<=0;
+            history_req_o<=0;
+            if(history_valid_i)begin
+                tx_d[0]<=8'h49;tx_d[1]<=8'h49;tx_d[2]<=1;
+                tx_d[3]<=history_status_i[7:0];tx_d[4]<=history_status_i[15:8];
+                tx_d[5]<=history_status_i[23:16];tx_d[6]<=history_status_i[31:24];tx_d[7]<=8'h0a;tx_req<=1;
+            end
+            if(status_valid_i) begin
+                tx_d[0]<=8'h44;tx_d[1]<=8'h56;tx_d[2]<=1;
+                tx_d[3]<=app_status_i[7:0];tx_d[4]<=app_status_i[15:8];
+                tx_d[5]<=app_status_i[23:16];tx_d[6]<=app_status_i[31:24];tx_d[7]<=8'h0a;tx_req<=1;
+            end
             thr_valid_o <= 1'b0;
             smooth_valid_o <= 1'b0;
             if (rx_valid) begin
                 if (!p_wait) begin
                     case (rx_byte)
-                        C_T, C_V, C_M, C_A, C_B, C_S, C_L: begin
+                        C_T, C_V, C_M, C_A, C_B, C_S, C_L, C_P, C_N, C_J, C_K, C_O, C_F,8'h59,8'h5a: begin
                             p_cmd  <= rx_byte;
                             p_wait <= 1'b1;
                         end
                         C_H: begin
                             // 只出请求脉冲；回包由 gray_hist_uart 负责
-                            hist_req_o <= 1'b1;
+                            if(ENABLE_DIAGNOSTICS) hist_req_o <= 1'b1;
+                        end
+                        C_D: status_req_o<=1;
+                        8'h5d:iir_tuning_o<=64'h0818080405020201;
+                        8'h5b:begin
+                         tx_d[0]<=8'h5b;tx_d[1]<=8'h49;tx_d[2]<=2;tx_d[3]<=iir_index;
+                         tx_d[4]<=(iir_index<8)?iir_tuning_o[iir_index[2:0]*8+:8]:8'hff;
+                         tx_d[5]<=0;tx_d[6]<=(iir_index<8)?0:1;tx_d[7]<=8'h0a;tx_req<=1;
+                        end
+                        8'h49:begin history_req_o<=1;snapshot_strong<=strong_pixels_i;snapshot_weak<=weak_pixels_i;snapshot_bypass<=bypass_pixels_i;end
+                        8'h55,8'h57,8'h58:begin
+                            tx_d[0]<=rx_byte;tx_d[1]<=8'h49;tx_d[2]<=1;tx_d[7]<=8'h0a;tx_req<=1;
+                            case(rx_byte)
+                             8'h55:begin tx_d[3]<=snapshot_strong[7:0];tx_d[4]<=snapshot_strong[15:8];tx_d[5]<=snapshot_strong[23:16];tx_d[6]<=snapshot_strong[31:24];end
+                             8'h57:begin tx_d[3]<=snapshot_weak[7:0];tx_d[4]<=snapshot_weak[15:8];tx_d[5]<=snapshot_weak[23:16];tx_d[6]<=snapshot_weak[31:24];end
+                             8'h58:begin tx_d[3]<=snapshot_bypass[7:0];tx_d[4]<=snapshot_bypass[15:8];tx_d[5]<=snapshot_bypass[23:16];tx_d[6]<=snapshot_bypass[31:24];end
+                            endcase
                         end
                         C_Q: begin
-                            tx_d[0]<=8'h41;tx_d[1]<=8'h41;tx_d[2]<=8'h01;
-                            tx_d[3]<=8'd2; // Fixed interpolated grayscale AA
-                            tx_d[4]<=thr_read_i;
-                            tx_d[5]<={6'd0,smooth_read_i};tx_d[6]<={7'd0,link_o};tx_d[7]<=8'h0a;
-                            tx_req<=1;
+                            tx_d[0]<=8'h56;tx_d[1]<={5'd0,play_mode_o};tx_d[2]<={7'd0,tnr_enable_o};
+                            tx_d[3]<={4'd0,age_a_o};tx_d[4]<={4'd0,age_b_o};
+                            tx_d[5]<=replay_div_o;tx_d[6]<=0;tx_d[7]<=8'h0a;tx_req<=1;
                         end
                         C_R: begin
                             tx_d[0] <= thr_read_i;       // 实际生效值（含按键）
@@ -255,6 +301,17 @@ module uart_cmd #(
                     endcase
                 end else begin
                     case (p_cmd)
+                        8'h59:iir_index<=rx_byte;
+                        8'h5a:if(iir_index<8)begin
+                         if(iir_index<2)iir_tuning_o[iir_index[2:0]*8+:8]<=(rx_byte>3)?3:rx_byte;
+                         else iir_tuning_o[iir_index[2:0]*8+:8]<=rx_byte;
+                        end
+                        C_P: play_mode_o<=(rx_byte>4)?0:rx_byte[2:0];
+                        C_N: tnr_enable_o<=rx_byte[0];
+                        C_J: age_a_o<=rx_byte[3:0];
+                        C_K: age_b_o<=rx_byte[3:0];
+                        C_O: replay_div_o<=(rx_byte==0)?1:rx_byte;
+                        C_F: play_mode_o<=rx_byte[0]?1:0;
                         C_T: begin
                             thr_o       <= rx_byte;
                             thr_valid_o <= 1'b1;

@@ -25,7 +25,6 @@
         <efx:design_file name="src/cmos_i2c/I2C_AR0135_1280720_Config.v" version="default" library="default" />
         <efx:design_file name="src/axi/AXI4_AWARMux.v" version="default" library="default" />
         <efx:design_file name="src/lvds/LCDDual2LVDS.v" version="default" library="default" />
-        <efx:design_file name="src/axi/axi4_ctrl.v" version="default" library="default" />
         <efx:design_file name="src/hdmi_ip/tmds_channel.v" version="default" library="default" />
         <efx:design_file name="src/hdmi_ip/rgb2dvi.v" version="default" library="default" />
         <efx:design_file name="src/cmos_i2c/i2c_timing_ctrl_reg16_dat8_wronly.v" version="default" library="default" />
@@ -40,11 +39,14 @@
         <efx:design_file name="src/image/sobel.v" version="default" library="default" />
         <efx:design_file name="src/image/canny_edge.v" version="default" library="default" />
         <efx:design_file name="src/image/image_pipeline_top.v" version="default" library="default" />
+        <efx:design_file name="src/image/ddr_video_store.v" version="default" library="default" />
         <efx:design_file name="src/display/image_mix.v" version="default" library="default" />
         <efx:design_file name="src/common/uart_cmd.v" version="default" library="default" />
         <efx:design_file name="src/common/uart_tx.v" version="default" library="default" />
-        <efx:design_file name="src/common/gray_hist_uart.v" version="default" library="default" />
         <efx:design_file name="src/control/canny_threshold_key_ctrl.v" version="default" library="default" />
+        <efx:design_file name="src/image/gray_temporal_iir.v" version="default" library="default" />
+        <efx:design_file name="src/image/temporal_ddr_history.v" version="default" library="default" />
+        <efx:design_file name="src/image/temporal_axi_mux.v" version="default" library="default" />
         <efx:top_vhdl_arch name="" />
         <efx:msg_config name="" />
         <efx:partition_definitions name="" />

@@ -44,6 +44,16 @@ module tb_uart_cmd;
     wire [7:0]  gain_r_o, gain_b_o;   // AWB 增益（1/64 定点）
     wire        link_o;               // 'L' 方向约束流式反馈开关
     wire        hist_req;             // 'H' 单拍（M6）
+    wire [2:0] play_mode;
+    wire tnr_enabled,status_req;
+    wire [3:0] age_a,age_b;
+    wire [7:0] replay_div;
+    reg status_valid=0;
+    wire history_req;
+    wire [63:0] iir_tuning;
+    reg history_valid=0;
+    always @(posedge clk) if(!rst_n)history_valid<=0;else history_valid<=history_req;
+    always @(posedge clk) if(!rst_n) status_valid<=0;else status_valid<=status_req;
     wire        tx_busy;              // TX 忙（含待发请求）
 
     // 'R' 回读的两个"实际生效值"输入。真实拓扑里它们来自按键控制器
@@ -58,6 +68,7 @@ module tb_uart_cmd;
 
     uart_cmd #(
         .CLK_FREQ (CLK_FREQ),
+        .ENABLE_DIAGNOSTICS(1),
         .BAUD     (BAUD),
         .THR_DEF  (8'd12),          // 与 example_top 的 IMG_THR_DEF 一致（上板定的工作点）
         .VIEW_DEF (2'd0),
@@ -67,6 +78,12 @@ module tb_uart_cmd;
     ) u_dut (
         .clk (clk), .rst_n (rst_n),
         .rx_i (rx), .tx_o (tx),
+        .status_valid_i(status_valid),.app_status_i(32'h00180042),
+        .status_req_o(status_req),.play_mode_o(play_mode),.tnr_enable_o(tnr_enabled),
+        .history_req_o(history_req),.history_valid_i(history_valid),.history_status_i(32'h0012340c),
+        .iir_tuning_o(iir_tuning),
+        .strong_pixels_i(32'h00012345),.weak_pixels_i(32'h00023456),.bypass_pixels_i(32'h00034567),
+        .age_a_o(age_a),.age_b_o(age_b),.replay_div_o(replay_div),
         .thr_read_i (thr_read), .smooth_read_i (smooth_read),
         .thr_o (thr_o), .thr_valid_o (thr_valid),
         .view_o (view_o), .mode_o (mode_o),
@@ -281,10 +298,10 @@ module tb_uart_cmd;
 
         //--------------------------------------------------------------
         // 5) 未知命令字符不能把解析器卡在"等参数"状态：
-        //    'X' 后面的 0x55 应当被当成又一个未知命令丢掉，而**不是**参数。
+        //    两个未知字节应丢掉，不能进入等待参数状态。
         //    这一步过了，紧跟着的 'T' 0x08 才能正常生效。
         //--------------------------------------------------------------
-        send_byte(8'h58, 1); send_byte(8'h55, 1);      // 'X' 0x55
+        send_byte(8'h7E, 1); send_byte(8'h7F, 1);      // Both remain unknown commands.
         send_byte(8'h54, 1); send_byte(8'h08, 1);      // 'T' 0x08
         chk("未知命令后 T 0x08", thr_o, 8'd8);
         chk("未知命令不误出写入脉冲", thr_valid_cnt, 8'd3);
@@ -412,6 +429,56 @@ module tb_uart_cmd;
         chk("R 回包结束 tx_busy", {7'b0, tx_busy}, 8'd0);
 
         //--------------------------------------------------------------
+        send_byte(8'h50,1);send_byte(8'd2,1);
+        send_byte(8'h4e,1);send_byte(8'd0,1);
+        send_byte(8'h4a,1);send_byte(8'd3,1);
+        send_byte(8'h4b,1);send_byte(8'd1,1);
+        send_byte(8'h4f,1);send_byte(8'd4,1);
+        chk("application replay mode",{5'd0,play_mode},8'd2);
+        chk("application tnr disabled",{7'd0,tnr_enabled},8'd0);
+        chk("application frame age",{4'd0,age_a},8'd3);
+        chk("application reference age",{4'd0,age_b},8'd1);
+        chk("application replay divider",replay_div,8'd4);
+        send_cmd_nostop(8'h51);
+        for(j=0;j<8;j=j+1) begin recv_byte;rb[j]=rxb;if(!rx_ok)nerr=nerr+1;end
+        chk("Q application magic",rb[0],8'h56);chk("Q application mode",rb[1],8'd2);
+        send_cmd_nostop(8'h44);
+        for(j=0;j<8;j=j+1) begin recv_byte;rb[j]=rxb;if(!rx_ok)nerr=nerr+1;end
+        chk("D mailbox magic",rb[0],8'h44);chk("D mailbox application",rb[1],8'h56);
+        chk("D mailbox source",rb[3],8'h42);chk("D mailbox status",rb[5],8'h18);
+        send_byte(8'h46,1);send_byte(8'd1,1);chk("F1 freezes",{5'd0,play_mode},8'd1);
+        send_byte(8'h46,1);send_byte(8'd0,1);chk("F0 restores live",{5'd0,play_mode},8'd0);
+        send_byte(8'h4f,1);send_byte(8'd0,1);chk("divider zero clamped",replay_div,8'd1);
+        send_cmd_nostop(8'h49);
+        for(j=0;j<8;j=j+1)begin recv_byte;rb[j]=rxb;if(!rx_ok)nerr=nerr+1;end
+        chk("IIR status signature",rb[0],8'h49);chk("IIR status payload",rb[3],8'h0c);
+        chk("IIR source low",rb[4],8'h34);chk("IIR source high",rb[5],8'h12);
+        send_cmd_nostop(8'h55);
+        for(j=0;j<8;j=j+1)begin recv_byte;rb[j]=rxb;if(!rx_ok)nerr=nerr+1;end
+        chk("strong count signature",rb[0],8'h55);chk("strong count low",rb[3],8'h45);chk("strong count mid",rb[4],8'h23);
+        send_cmd_nostop(8'h57);
+        for(j=0;j<8;j=j+1)begin recv_byte;rb[j]=rxb;if(!rx_ok)nerr=nerr+1;end
+        chk("weak count low",rb[3],8'h56);
+        send_cmd_nostop(8'h58);
+        for(j=0;j<8;j=j+1)begin recv_byte;rb[j]=rxb;if(!rx_ok)nerr=nerr+1;end
+        chk("bypass count low",rb[3],8'h67);
+        send_byte(8'h59,1);send_byte(8'h00,1);
+        send_byte(8'h5a,1);send_byte(8'h02,1);
+        chk("runtime strong weight",iir_tuning[7:0],8'h02);
+        send_cmd_nostop(8'h5b);
+        for(j=0;j<8;j=j+1)begin recv_byte;rb[j]=rxb;if(!rx_ok)nerr=nerr+1;end
+        chk("tuning reply version",rb[2],8'h02);chk("tuning reply value",rb[4],8'h02);
+        send_byte(8'h59,1);send_byte(8'h01,1);send_byte(8'h5a,1);send_byte(8'hff,1);
+        chk("weight clamped",iir_tuning[15:8],8'h03);
+        send_byte(8'h59,1);send_byte(8'h08,1);send_byte(8'h5a,1);send_byte(8'h99,1);
+        chk("invalid index ignored",iir_tuning[7:0],8'h02);
+        send_cmd_nostop(8'h5b);
+        for(j=0;j<8;j=j+1)begin recv_byte;rb[j]=rxb;if(!rx_ok)nerr=nerr+1;end
+        chk("invalid index flag",rb[6],8'h01);
+        send_byte(8'h5d,1);
+        if(iir_tuning!=64'h0818080405020201)begin nerr=nerr+1;$display("runtime defaults mismatch");end
+        chk("restored strong weight",iir_tuning[7:0],8'h01);
+        chk("restored weak weight",iir_tuning[15:8],8'h02);
         if (nerr == 0)
             $display("UART_CMD PASS（%0d 个用例，0 错误）", ncase);
         else

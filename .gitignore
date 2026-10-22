@@ -93,3 +93,6 @@ Thumbs.db
 desktop.ini
 
 .lock
+build_video_store/
+build_gray_iir/
+build_iir_motion/

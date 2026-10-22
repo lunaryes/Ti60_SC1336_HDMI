@@ -1,0 +1,51 @@
+{
+  "created": "2026-10-22T16:17:09.283658",
+  "tool": "Efinity 2026.1.132",
+  "device": "Ti60F225",
+  "programmed": true,
+  "hardware_access_attempted": true,
+  "reason": "User subsequently authorized download",
+  "default_current_weights": [
+    "1/2",
+    "3/4",
+    "1"
+  ],
+  "ram": 136,
+  "xlr": 19954,
+  "dsp": 28,
+  "sys_setup_ns": 3.345,
+  "pixel_setup_ns": 3.099,
+  "source_sha256": {
+    "example_top.v": "1e37ce06eb753cadeed1dee1190eb26918134da14f387e740e1c63f0c259ddd3",
+    "Ti60_Demo.xml": "1fbcb7b24641667be17399f5de55127536096fb6a3894cd2966786867d124a01",
+    "src/common/uart_cmd.v": "ed7c8ac3fb2adde2f0949090eec1abcca725480c5574d1056691a0f85459dead",
+    "src/image/ddr_video_store.v": "afd76bc2bd6badf1b7ccfa65fc8e25918e3269136c3d9c2d38a14f95ee4158ac",
+    "src/image/image_pipeline_top.v": "a62abd376f10b97f7e4c12390504e7c285c140da17d6a097ea980d1e9a60549c",
+    "src/image/gray_temporal_iir.v": "085d856ed4f9cb8e3ec98a761c2608f07dc4f48fb0c6605fda025f894e37bec0",
+    "src/image/temporal_ddr_history.v": "84df2968e43edefa895057ef43ea3dd633a3fb221892de742d7fbc9a26be7271",
+    "src/image/temporal_axi_mux.v": "221737e9b11c2904c959a87052a524480607593c4e26e705d38279e4d06f8dd8"
+  },
+  "bit_sha256": "3d79cfd425a0fb98d5b81f95ab91c91c62376496229dbb376a26cce6b9643b0b",
+  "checks": [
+    "independent pixel model PASS",
+    "coefficient and cache invalidation PASS",
+    "DDR dual-master/startup PASS",
+    "UART 86 cases PASS",
+    "Canny regression PASS",
+    "routed constrained timing PASS"
+  ],
+  "synthetic_ghost_error": {
+    "new": 4,
+    "legacy": 32,
+    "pixels": 8,
+    "scope": "synthetic low-contrast moving edge; not real video"
+  },
+  "real_video_result": "Control/history validated; visual ghosting improvement not quantified",
+  "programming": "JTAG SRAM only; Flash unchanged",
+  "programmed_at": "2026-10-22T16:29:29.262368",
+  "board_checks": [
+    "IIR history and zero errors PASS",
+    "freeze/replay/compare/difference PASS",
+    "runtime parameter write/read/default restore PASS"
+  ]
+}

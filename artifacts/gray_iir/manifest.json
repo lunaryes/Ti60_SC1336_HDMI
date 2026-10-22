@@ -1,0 +1,33 @@
+{
+  "created": "2026-10-22T15:59:09.462872",
+  "tool": "Efinity 2026.1.132",
+  "device": "Ti60F225",
+  "programming": "SRAM only; Flash unchanged",
+  "algorithm": "post-median gray motion-adaptive recursive IIR, Q8.4, alpha 1/4, 1/2, 1",
+  "ram": 136,
+  "xlr": 19403,
+  "dsp": 28,
+  "sys_setup_ns": 3.763,
+  "pixel_setup_ns": 3.508,
+  "source_sha256": {
+    "example_top.v": "1c7d6b220a00419e37c79be257cdb6b3bcb1da27420a48d71cdf4f455177981a",
+    "Ti60_Demo.xml": "1fbcb7b24641667be17399f5de55127536096fb6a3894cd2966786867d124a01",
+    "src/common/uart_cmd.v": "6f0ebff20994ccdbf90588917b0efc883623ba115c6e5e6938689f79642c4363",
+    "src/image/ddr_video_store.v": "afd76bc2bd6badf1b7ccfa65fc8e25918e3269136c3d9c2d38a14f95ee4158ac",
+    "src/image/image_pipeline_top.v": "a62abd376f10b97f7e4c12390504e7c285c140da17d6a097ea980d1e9a60549c",
+    "src/image/gray_temporal_iir.v": "55888e7f89dd92c7b70d01e5e06afd5c969a02a93a0a1b28e2b8bfc9fced95ee",
+    "src/image/temporal_ddr_history.v": "3a204b60d9cea14134b1bf749cf8b1c72916ba9e13dc5aef0a1189365873bb94",
+    "src/image/temporal_axi_mux.v": "221737e9b11c2904c959a87052a524480607593c4e26e705d38279e4d06f8dd8"
+  },
+  "bit_sha256": "4a70745a90db08b9281c6d4dde12a74827238abc87280eab42617aa6f31dd2cc",
+  "checks": [
+    "independent pixel reference PASS",
+    "dual AXI master DDR PASS",
+    "DDR startup gate PASS",
+    "UART 78 cases PASS",
+    "Canny regression PASS",
+    "board controls/history/counts PASS",
+    "second SRAM reload PASS"
+  ],
+  "visual_improvement": "not yet measured"
+}

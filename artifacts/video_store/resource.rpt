@@ -1,0 +1,153 @@
+
+Elitestek FPGA Placement and Routing.
+Version: 2026.1.132 
+Date: Thu Oct 22 14:56:59 2026
+
+Copyright (C) 2013 - 2026 Efinix, Inc. All rights reserved.
+ 
+Family: Titanium 
+Device: Ti60F225
+Top-level Entity Name: Ti60_Demo
+
+---------- IO Interface Summary (begin) ----------
+
++------------------------+--------------+
+| Missing Interface Pins | Input/Output |
++------------------------+--------------+
+|     lcd_g7_0_i[0]      |    Input     |
+|     lcd_g7_0_i[1]      |    Input     |
+|     lcd_b7_0_i[2]      |    Input     |
+|     lcd_b7_0_i[3]      |    Input     |
+|     lcd_b7_0_i[4]      |    Input     |
+|     lcd_b7_0_i[5]      |    Input     |
+|     lcd_r7_0_i[6]      |    Input     |
+|     lcd_r7_0_i[7]      |    Input     |
+|     lcd_b7_0_i[6]      |    Input     |
+|     lcd_b7_0_i[7]      |    Input     |
+|      clk_pixel_2x      |    Input     |
+|     lcd_r7_0_i[4]      |    Input     |
+|     lcd_r7_0_i[5]      |    Input     |
+|     lcd_g7_0_i[4]      |    Input     |
+|     lcd_g7_0_i[5]      |    Input     |
+|     lcd_g7_0_i[2]      |    Input     |
+|     lcd_g7_0_i[3]      |    Input     |
+|     lcd_b7_0_i[0]      |    Input     |
+|     lcd_b7_0_i[1]      |    Input     |
+|     lcd_g7_0_i[6]      |    Input     |
+|     lcd_g7_0_i[7]      |    Input     |
+|     lcd_r7_0_i[2]      |    Input     |
+|     lcd_r7_0_i[3]      |    Input     |
+|     lcd_r7_0_i[0]      |    Input     |
+|     lcd_r7_0_i[1]      |    Input     |
+|      lcd_tp_scl_i      |    Input     |
+|      lcd_tp_sda_i      |    Input     |
+|      lcd_tp_int_i      |    Input     |
+|     i_dqs_n_lo[1]      |    Input     |
+|     i_dqs_n_hi[1]      |    Input     |
+|       csi_sda_i        |    Input     |
+|      dsi_refclk_i      |    Input     |
+|        clk_54m         |    Input     |
+|       csi_scl_i        |    Input     |
+|       csi_ctl0_i       |    Input     |
+|       csi_ctl1_i       |    Input     |
+|     i_dqs_n_lo[0]      |    Input     |
+|     i_dqs_n_hi[0]      |    Input     |
+|        clk_25m         |    Input     |
+|       csi_rxc_i        |    Input     |
+|    dsi_txd3_lp_p_i     |    Input     |
+|    dsi_txd3_lp_n_i     |    Input     |
+|    dsi_txd0_lp_p_i     |    Input     |
+|    dsi_txd0_lp_n_i     |    Input     |
+|    dsi_txd1_lp_p_i     |    Input     |
+|    dsi_txd1_lp_n_i     |    Input     |
+|    dsi_txd2_lp_p_i     |    Input     |
+|    dsi_txd2_lp_n_i     |    Input     |
+|    csi_rxd2_hs_i[0]    |    Input     |
+|    csi_rxd2_hs_i[1]    |    Input     |
+|    csi_rxd2_hs_i[2]    |    Input     |
+|    csi_rxd2_hs_i[3]    |    Input     |
+|    csi_rxd2_hs_i[4]    |    Input     |
+|    csi_rxd2_hs_i[5]    |    Input     |
+|    csi_rxd2_hs_i[6]    |    Input     |
+|    csi_rxd2_hs_i[7]    |    Input     |
+|    csi_rxd2_lp_p_i     |    Input     |
+|    csi_rxd2_lp_n_i     |    Input     |
+|    csi_rxd3_hs_i[0]    |    Input     |
+|    csi_rxd3_hs_i[1]    |    Input     |
+|    csi_rxd3_hs_i[2]    |    Input     |
+|    csi_rxd3_hs_i[3]    |    Input     |
+|    csi_rxd3_hs_i[4]    |    Input     |
+|    csi_rxd3_hs_i[5]    |    Input     |
+|    csi_rxd3_hs_i[6]    |    Input     |
+|    csi_rxd3_hs_i[7]    |    Input     |
+|    csi_rxd3_lp_p_i     |    Input     |
+|    csi_rxd3_lp_n_i     |    Input     |
+|     csi_rxc_lp_p_i     |    Input     |
+|     csi_rxc_lp_n_i     |    Input     |
+|    csi_rxd0_hs_i[0]    |    Input     |
+|    csi_rxd0_hs_i[1]    |    Input     |
+|    csi_rxd0_hs_i[2]    |    Input     |
+|    csi_rxd0_hs_i[3]    |    Input     |
+|    csi_rxd0_hs_i[4]    |    Input     |
+|    csi_rxd0_hs_i[5]    |    Input     |
+|    csi_rxd0_hs_i[6]    |    Input     |
+|    csi_rxd0_hs_i[7]    |    Input     |
+|    csi_rxd0_lp_p_i     |    Input     |
+|    csi_rxd0_lp_n_i     |    Input     |
+|    csi_rxd1_hs_i[0]    |    Input     |
+|    csi_rxd1_hs_i[1]    |    Input     |
+|    csi_rxd1_hs_i[2]    |    Input     |
+|    csi_rxd1_hs_i[3]    |    Input     |
+|    csi_rxd1_hs_i[4]    |    Input     |
+|    csi_rxd1_hs_i[5]    |    Input     |
+|    csi_rxd1_hs_i[6]    |    Input     |
+|    csi_rxd1_hs_i[7]    |    Input     |
+|    csi_rxd1_lp_p_i     |    Input     |
+|    csi_rxd1_lp_n_i     |    Input     |
++------------------------+--------------+
+
+----------- IO Interface Summary (end) ----------
+
+
+---------- IO Placement Summary (begin) ----------
+
++----------------------+--------------+
+| Unassigned Core Pins | Input/Output |
++----------------------+--------------+
+|       lcd_de_o       |    Output    |
++----------------------+--------------+
+
+----------- IO Placement Summary (end) ----------
+
+
+---------- Module Resource Usage Distribution Estimates (begin) ----------
+
+'Module Resource Usage Distribution Estimates' table printed in: outflow\Ti60_Demo.hier_util.rpt
+
+----------- Module Resource Usage Distribution Estimates (end) ----------
+
+Elapsed time for packing: 0 hours 0 minutes 2 seconds
+---------- Resource Summary (begin) ----------
+Inputs: 68 / 1703 (3.99%)
+Outputs: 480 / 2267 (21.17%)
+Global Clocks (GBUF): 14 / 32 (43.75%)
+Regional Clocks (RBUF): 0 / 32 (0.00%)
+	RBUF: Core: 0 / 16 (0.00%)
+	RBUF: Periphery: 0 / 8 (0.00%)
+	RBUF: Multi-Region: 0 / 8 (0.00%)
+XLRs: 16720 / 60800 (27.50%)
+	XLRs needed for LUT4: 6705 / 60800 (11.03%)
+	XLRs needed for LUT4 + FF: 3279 / 60800 (5.39%)
+	XLRs needed for COMB4: 0 / 60800 (0.00%)
+	XLRs needed for COMB4 + FF: 0 / 60800 (0.00%)
+	XLRs needed for Adder: 2719 / 60800 (4.47%)
+	XLRs needed for Adder + FF: 455 / 60800 (0.75%)
+	XLRs needed for SRL8: 592 / 14720 (4.02%)
+	XLRs needed for SRL8 + FF: 0 / 14720 (0.00%)
+	XLRs needed for FF: 2970 / 60800 (4.88%)
+	XLRs needed for Routing: 0 / 60800 (0.00%)
+Memory Blocks: 120 / 256 (46.88%)
+DSP Blocks: 28 / 160 (17.50%)
+---------- Resource Summary (end) ----------
+
+Elapsed time for placement: 0 hours 0 minutes 40 seconds

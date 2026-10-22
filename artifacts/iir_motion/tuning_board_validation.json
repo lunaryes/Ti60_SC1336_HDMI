@@ -1,0 +1,6 @@
+{
+  "parameter_write_reply": "5B 49 02 00 02 00 00 0A",
+  "default_restore_reply": "5b 49 02 00 01 00 00 0a",
+  "history_status": "49 49 01 0e 93 05 00 0a",
+  "errors": 0
+}

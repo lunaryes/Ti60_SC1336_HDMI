@@ -1,0 +1,200 @@
+[
+  {
+    "label": "live_on",
+    "mode": 0,
+    "tnr": 1,
+    "source": 526,
+    "active_mode": 0,
+    "retained": 15,
+    "errors": 0,
+    "history_errors": 0,
+    "history_source": 526,
+    "operation": 3,
+    "history_valid": true,
+    "counts": [
+      837466,
+      79452,
+      4682
+    ]
+  },
+  {
+    "label": "live_advances",
+    "mode": 0,
+    "tnr": 1,
+    "source": 535,
+    "active_mode": 0,
+    "retained": 15,
+    "errors": 0,
+    "history_errors": 0,
+    "history_source": 535,
+    "operation": 3,
+    "history_valid": true,
+    "counts": [
+      838868,
+      78060,
+      4672
+    ]
+  },
+  {
+    "label": "freeze_cached",
+    "mode": 1,
+    "tnr": 1,
+    "source": 536,
+    "active_mode": 1,
+    "retained": 15,
+    "errors": 0,
+    "history_errors": 0,
+    "history_source": 536,
+    "operation": 3,
+    "history_valid": true,
+    "counts": [
+      837711,
+      78988,
+      4901
+    ]
+  },
+  {
+    "label": "freeze_stable",
+    "mode": 1,
+    "tnr": 1,
+    "source": 536,
+    "active_mode": 1,
+    "retained": 15,
+    "errors": 0,
+    "history_errors": 0,
+    "history_source": 536,
+    "operation": 3,
+    "history_valid": true,
+    "counts": [
+      837711,
+      78988,
+      4901
+    ]
+  },
+  {
+    "label": "seek_reset_and_cache",
+    "mode": 1,
+    "tnr": 1,
+    "source": 533,
+    "active_mode": 1,
+    "retained": 15,
+    "errors": 0,
+    "history_errors": 0,
+    "history_source": 533,
+    "operation": 3,
+    "history_valid": true,
+    "counts": [
+      0,
+      0,
+      921600
+    ]
+  },
+  {
+    "label": "replay",
+    "mode": 2,
+    "tnr": 1,
+    "source": 525,
+    "active_mode": 2,
+    "retained": 15,
+    "errors": 0,
+    "history_errors": 0,
+    "history_source": 525,
+    "operation": 3,
+    "history_valid": true,
+    "counts": [
+      834183,
+      82873,
+      4544
+    ]
+  },
+  {
+    "label": "replay_advances",
+    "mode": 2,
+    "tnr": 1,
+    "source": 528,
+    "active_mode": 2,
+    "retained": 15,
+    "errors": 0,
+    "history_errors": 0,
+    "history_source": 528,
+    "operation": 3,
+    "history_valid": true,
+    "counts": [
+      838881,
+      78197,
+      4522
+    ]
+  },
+  {
+    "label": "compare",
+    "mode": 3,
+    "tnr": 1,
+    "source": 533,
+    "active_mode": 3,
+    "retained": 15,
+    "errors": 0,
+    "history_errors": 0,
+    "history_source": 528,
+    "operation": 0,
+    "history_valid": false,
+    "counts": [
+      0,
+      0,
+      921600
+    ]
+  },
+  {
+    "label": "difference",
+    "mode": 4,
+    "tnr": 1,
+    "source": 533,
+    "active_mode": 4,
+    "retained": 15,
+    "errors": 0,
+    "history_errors": 0,
+    "history_source": 528,
+    "operation": 0,
+    "history_valid": false,
+    "counts": [
+      0,
+      0,
+      921600
+    ]
+  },
+  {
+    "label": "disabled",
+    "mode": 0,
+    "tnr": 0,
+    "source": 544,
+    "active_mode": 0,
+    "retained": 15,
+    "errors": 0,
+    "history_errors": 0,
+    "history_source": 528,
+    "operation": 0,
+    "history_valid": false,
+    "counts": [
+      0,
+      0,
+      921600
+    ]
+  },
+  {
+    "label": "restored_live_on",
+    "mode": 0,
+    "tnr": 1,
+    "source": 562,
+    "active_mode": 0,
+    "retained": 15,
+    "errors": 0,
+    "history_errors": 0,
+    "history_source": 562,
+    "operation": 3,
+    "history_valid": true,
+    "counts": [
+      830607,
+      84584,
+      6409
+    ]
+  }
+]

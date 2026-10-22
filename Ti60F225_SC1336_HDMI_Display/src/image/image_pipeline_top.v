@@ -89,7 +89,8 @@ module image_pipeline_top #(
     parameter integer LINK_GAP1   = 0,
     // ★ 弱结构保留（不依赖强种子的第三条保留路径），见 canny_edge.v。
     parameter integer WEAK_STRUCT = 0,
-    parameter integer EDGE_AA = 0
+    parameter integer EDGE_AA = 0,
+    parameter integer TEMPORAL_EXT = 0
 )(
     input  wire        clk_i,        // clk_pixel
     input  wire        rst_ni,
@@ -118,7 +119,9 @@ module image_pipeline_top #(
     output wire        dbg_cond_o,
     output wire        dbg_link_en_o,
     output wire        dbg_cond_seen_o,
-    output wire        dbg_link_seen_o
+    output wire        dbg_link_seen_o,
+    input wire [7:0] temporal_y_i,
+    input wire temporal_de_i,temporal_vs_i
 );
 
     localparam CANNY_LAT = 12;
@@ -126,10 +129,10 @@ module image_pipeline_top #(
     localparam MED_LAT   = 1;        // median_filter_3x3：组合中值 + 输出寄存
     // 1 灰度 + 2 前窗 + 1 中值 + 2 后窗 + 12 Canny；进 image_mix 时再加 1 拍
     // 输出寄存器，所以 LATENCY = ORIG_LAT + 1。
-    localparam ORIG_LAT  = 1 + WIN_LAT + MED_LAT + WIN_LAT + CANNY_LAT;  // = 18
+    localparam ORIG_LAT  = 1 + WIN_LAT + MED_LAT + WIN_LAT + CANNY_LAT + (TEMPORAL_EXT?3:0);
     // view 3 的 Y 延迟：med_y 已经比 gray_y 晚 (WIN_LAT+MED_LAT)=3 拍，再延
     // Y_DLY 拍后与 can_de 同拍（ORIG_LAT-1 = 17 拍），最后经 image_mix 1 拍输出。
-    localparam Y_DLY     = ORIG_LAT - 1 - (WIN_LAT + MED_LAT);           // = 14
+    localparam Y_DLY     = ORIG_LAT - 1 - (WIN_LAT + MED_LAT) - (TEMPORAL_EXT?3:0);
 
     //-----------------------------------------------------------------
     // 1) 灰度化：RGB888 → Y8
@@ -221,6 +224,10 @@ module image_pipeline_top #(
     assign dbg_de_o = med_de;
     assign dbg_vs_o = med_vs;
 
+    wire [7:0] algorithm_y=TEMPORAL_EXT?temporal_y_i:med_y;
+    wire algorithm_de=TEMPORAL_EXT?temporal_de_i:med_de;
+    wire algorithm_vs=TEMPORAL_EXT?temporal_vs_i:med_vs;
+
     wire        win2_vs, win2_de;
     wire [7:0]  q11, q12, q13;
     wire [7:0]  q21, q22, q23;
@@ -232,9 +239,9 @@ module image_pipeline_top #(
         .clk     (clk_i),
         .rst_n   (rst_ni),
 
-        .vsync_i (med_vs),
-        .de_i    (med_de),
-        .gray_i  (med_y),
+        .vsync_i (algorithm_vs),
+        .de_i    (algorithm_de),
+        .gray_i  (algorithm_y),
 
         .vsync_o (win2_vs),
         .de_o    (win2_de),
@@ -351,7 +358,7 @@ module image_pipeline_top #(
             for (j = 0; j < Y_DLY; j = j + 1)
                 y_dly[j] <= 8'd0;
         end else begin
-            y_dly[0] <= med_y;
+            y_dly[0] <= algorithm_y;
             for (j = 1; j < Y_DLY; j = j + 1)
                 y_dly[j] <= y_dly[j-1];
         end
