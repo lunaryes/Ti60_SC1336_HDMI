@@ -61,7 +61,7 @@ python sim/video_control.py --port COM6 --mode difference --age 0 --reference 1
 python sim/video_control.py --port COM6 --mode live --tnr off
 ```
 
-脚本先检查固件协议标识，再设置参数并输出状态；不会下载固件或保存诊断图像。`--layout original|edge|split` 仍控制 ISP/Canny 的原图、边缘、左右显示；`--view gray|edge` 控制算法视图。
+脚本先检查固件协议标识，再设置参数并输出状态；不会下载固件或保存诊断图像。`--layout original|edge|split|overlay` 分别选择原图、算法支路、左灰度右边缘、左灰度右原图叠加亮黄色边缘（默认）。`overlay` 对应 HEX `4D 03`，`52` 回读 `layout=3`；此布局强制使用边缘掩码，其他布局由 `--view gray|edge` 控制算法视图。图形标注用 HEX `45 00` / `45 01` 关闭/开启。
 
 ## 二进制串口协议
 

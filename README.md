@@ -112,3 +112,9 @@
    增强落点：`rgb_to_gray` 之后、第一级 `pix_window_3x3` 之前做 256×8 LUT；同步读 BRAM 会 +1 拍，
    **LATENCY 19→20 要同步改 `IMG_LAT` 和 hsync 延迟**。根因仍是 SC1336 固定曝光、无 AE 环
    （`docs/RGB_TO_GRAY.md` §4.1）。
+
+## 当前默认显示模式
+
+模式3：左侧灰度图，右侧原图叠加亮黄色边缘，保留图形框和中文标注。串口发送 HEX `4D 03`，或运行 `python sim/video_control.py --port COM6 --layout overlay`；发送 `52` 回读第3字节为 `03`。图形标注开关为 `45 00` / `45 01`。新显示模式需重新生成位流并下载后生效。
+
+完整协议见 [串口命令参考](docs/UART_COMMAND_REFERENCE.md)，资源优化及字符源码恢复说明见 [仅图形配置](docs/SHAPE_ONLY_RESOURCE_PROFILE.md)。
