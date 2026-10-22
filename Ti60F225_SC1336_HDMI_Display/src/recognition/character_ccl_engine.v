@@ -1,0 +1,334 @@
+`timescale 1ns/1ps
+// 无卡片字符分割：八连通两遍 CCL，等价标签表 + 片内标签图。
+// 不使用外框推断字符位置。直接裁紧每个前景连通域并统计 16x16 占比。
+// 裁剪内保留同极性的其它笔画，不能把“脸框里的眼鼻嘴”抹掉后误当 O。
+module character_ccl_engine #(
+ parameter integer W=320,H=180,AW=$clog2(W*H),MAX_CANDIDATES=64,
+ parameter integer MIN_HEIGHT=6,MAX_HEIGHT=128,LABEL_BITS=11,MAX_OBJECTS=8
+)(
+ input wire clk,rst_n,start_i,output reg busy_o,done_o,
+ output reg [AW-1:0] raw_addr_o,input wire [3:0] raw_data_i,
+ // 每项 {ASCII[7:0],xmin[8:0],xmax[8:0],ymin[7:0],ymax[7:0]}。
+ output reg [MAX_OBJECTS*42-1:0] objects_o,output reg [MAX_OBJECTS-1:0] valid_o,
+ output reg overflow_o,output reg [23:0] cycles_o,
+ // Sticky per-analysis diagnostics: {overflow, capacity, container, too_small}.
+ output reg [3:0] diagnostic_o
+);
+ localparam integer N=W*H, LABEL_COUNT=1<<LABEL_BITS;
+ localparam IDLE=0,RAW_ISS=1,RAW_WAIT=2,RAW_EVAL=3,NB_ISS=4,NB_WAIT=5,NB_EVAL=6,
+   ROOT_ISS=7,ROOT_WAIT=8,ROOT_EVAL=9,ASSIGN=10,ADV=11,
+   CLEAR_STATS=12,P2_ISS=13,P2_WAIT=14,P2_EVAL=15,STATS_ISS=16,STATS_WAIT=17,
+   STATS_WRITE=18,P2_ADV=19,CAND_ISS=20,CAND_WAIT=21,CAND_EVAL=22,
+   BIN_SETUP=23,BIN_ISS=24,BIN_WAIT=25,BIN_EVAL=26,BIN_STORE=27,
+   MATCH_START=28,MATCH_WAIT=29,CAND_ADV=30,NEXT_POLARITY=31,PUBLISH=32,
+   HIER_ISS=33,HIER_WAIT=34,HIER_EVAL=35,
+   PROFILE_ISS=36,PROFILE_WAIT=37,PROFILE_EVAL=38,PROFILE_DECIDE=39;
+ reg [5:0] state;reg polarity,second_pass;
+ reg label_we,parent_we,stats_we;
+ reg [AW-1:0] label_wa,label_ra;reg [LABEL_BITS-1:0] label_wd;wire [LABEL_BITS-1:0] label_rd;
+ reg [LABEL_BITS-1:0] parent_wa,parent_ra,parent_wd;wire [LABEL_BITS-1:0] parent_rd;
+ reg [LABEL_BITS-1:0] stats_wa,stats_ra;reg [49:0] stats_wd;wire [49:0] stats_rd;
+ shape_sdp_ram #(.WIDTH(LABEL_BITS),.DEPTH(N),.AW(AW)) u_labels(clk,label_we,label_wa,label_ra,label_wd,label_rd);
+ shape_sdp_ram #(.WIDTH(LABEL_BITS),.DEPTH(LABEL_COUNT),.AW(LABEL_BITS)) u_parent(clk,parent_we,parent_wa,parent_ra,parent_wd,parent_rd);
+ shape_sdp_ram #(.WIDTH(50),.DEPTH(LABEL_COUNT),.AW(LABEL_BITS)) u_stats(clk,stats_we,stats_wa,stats_ra,stats_wd,stats_rd);
+ reg [AW-1:0] index;reg [8:0] x;reg [7:0] y;
+ reg [LABEL_BITS-1:0] left_label,root_min,root;
+ reg [LABEL_BITS:0] next_label;reg [1:0] nb;
+ reg [LABEL_BITS-1:0] clear_label,candidate_label;reg [7:0] candidates;
+ reg [MAX_OBJECTS*42-1:0] pending_objects;reg [MAX_OBJECTS-1:0] pending_valid;
+ reg [23:0] work_cycles;
+ reg bbox_we;reg [5:0] bbox_wa,bbox_ra,hier_index;reg [33:0] bbox_wd;wire [33:0] bbox_rd;
+ reg [6:0] dark_count;
+ shape_sdp_ram #(.WIDTH(34),.DEPTH(64),.AW(6)) u_boxes(clk,bbox_we,bbox_wa,bbox_ra,bbox_wd,bbox_rd);
+ reg [8:0] xmin,xmax;reg [7:0] ymin,ymax;
+ wire [9:0] box_w={1'b0,stats_rd[17:9]}-{1'b0,stats_rd[8:0]}+1'b1;
+ wire [8:0] box_h={1'b0,stats_rd[33:26]}-{1'b0,stats_rd[25:18]}+1'b1;
+ wire [18:0] box_area=box_w*box_h;
+ wire [15:0] area=stats_rd[49:34];
+ wire candidate_ok=area>=16 && box_h>=MIN_HEIGHT && box_h<=MAX_HEIGHT && box_w>=2&&box_w<=128&&
+   stats_rd[8:0]>1&&stats_rd[17:9]<W-2&&stats_rd[25:18]>1&&stats_rd[33:26]<H-2&&
+   box_w*8>=box_h && box_w*2<=box_h*3 && ((box_h<12)?area*20>=box_area:area*12>=box_area) &&
+   (area*8<box_area*7 || box_w*4<box_h);
+ reg [3:0] bin_x,bin_y;reg [8:0] bx0,bx1,px;reg [7:0] by0,by1,py;
+ reg [9:0] width;reg [8:0] height;
+ // Count each component pixel once, before the 16x16 resampler duplicates
+ // small glyph pixels. A rectangular container is not a character candidate.
+ reg [9:0] prof_top,prof_bottom,prof_left,prof_right,prof_row,prof_col;
+ reg [10:0] prof_border;reg [2:0] prof_corners;
+ reg [9:0] prof_line,prof_middle_max;reg [3:0] prof_extrema;
+ wire component_pixel=label_rd==candidate_label;
+ wire rectangular_container=width>=8&&height>=8&&prof_corners>=3&&
+   prof_top*10>=width*6&&prof_bottom*10>=width*6&&
+   prof_left*10>=height*6&&prof_right*10>=height*6&&
+   prof_row*10<=width*3&&prof_col*10<=height*3&&
+   prof_border*10>=((width+height)*2-4)*6;
+ // Closed geometric outlines can resemble O or V after resampling. Reject
+ // evidence-backed thin triangular frames, not an open V or a T with a stem.
+ wire triangular_container=width>=8&&height>=8&&
+   ((prof_top*10>=width*7&&prof_bottom*10<=width*3)||
+    (prof_bottom*10>=width*7&&prof_top*10<=width*3))&&
+   prof_middle_max*10<=width*3&&prof_col*10<=height*3;
+ // A nearly circular thin outline is intrinsically ambiguous with letter O.
+ // Leave this case to the geometry branch; narrow digit 0 is not excluded.
+ wire round_container=width>=12&&height>=12&&width*10>=height*9&&width*9<=height*10&&
+   area*5<width*height&&(&prof_extrema)&&prof_row*10<=width*3&&prof_col*10<=height*3;
+ wire [13:0] xb0=bin_x*width+15;
+ wire [13:0] xb1=({1'b0,bin_x}+1'b1)*width+15;
+ wire [12:0] yb0=bin_y*height+15;
+ wire [12:0] yb1=({1'b0,bin_y}+1'b1)*height+15;
+ // 目标小于16格时用最近邻扩展，不能留下未采样的空列（尤其是1/I）。
+ wire [8:0] sample_x0=width<16?(bin_x*width)>>4:xb0>>4;
+ wire [8:0] sample_x1=width<16?(bin_x*width)>>4:(xb1>>4)-1'b1;
+ wire [7:0] sample_y0=height<16?(bin_y*height)>>4:yb0>>4;
+ wire [7:0] sample_y1=height<16?(bin_y*height)>>4:(yb1>>4)-1'b1;
+ reg [7:0] hits,total,hits_strong;reg [255:0] glyph,glyph_strong;
+ reg match_start,match_phase,strong_ok;reg [7:0] strong_ascii;reg [8:0] glyph_cells,strong_cells;
+ wire bin_foreground=total!=0&&({2'b0,hits}<<2)>=total;
+ // 反极性“大块背景+少量孔洞”不能伪装成粗体 M；I/1 等窄字保留例外。
+ wire glyph_valid=(match_phase?glyph_cells:strong_cells)<=216||width*4<height;
+ wire match_done,recognized;wire [5:0] matched_class;wire [7:0] matched_ascii;
+ wire [8:0] best,second;wire [255:0] matched_template;
+ integer oi,free_index,store_index;reg nested;reg [41:0] existing;reg [MAX_OBJECTS-1:0] keep_valid;
+ always @(*) begin
+  nested=0;existing=0;keep_valid=pending_valid;free_index=-1;
+  for(oi=0;oi<MAX_OBJECTS;oi=oi+1) begin
+   existing=pending_objects[oi*42+:42];
+   if(pending_valid[oi]&&xmin>=existing[33:25]&&xmax<=existing[24:16]&&
+      ymin>=existing[15:8]&&ymax<=existing[7:0]) nested=1;
+   // 较大的反极性外轮廓替换先前误选的内部孔洞，而不是重复追加。
+   if(polarity&&pending_valid[oi]&&xmin<=existing[33:25]&&xmax>=existing[24:16]&&
+      ymin<=existing[15:8]&&ymax>=existing[7:0]) keep_valid[oi]=0;
+  end
+  for(oi=MAX_OBJECTS-1;oi>=0;oi=oi-1) if(!keep_valid[oi]) free_index=oi;
+ end
+ character_matcher16 u_matcher(.clk(clk),.rst_n(rst_n),.start_i(match_start),.candidate_valid_i(glyph_valid),
+   .glyph_i(match_phase?glyph:glyph_strong),.width_i({1'b0,width}),.height_i({1'b0,height}),.result_valid_o(match_done),
+   .recognized_o(recognized),.class_id_o(matched_class),.ascii_o(matched_ascii),
+   .best_distance_o(best),.second_distance_o(second),.template_o(matched_template));
+ reg [49:0] updated_stats;
+ always @(*) begin
+   updated_stats=stats_rd;
+   if(area==0) updated_stats={16'd1,y,y,x,x};
+   else begin
+     updated_stats[49:34]=area==65535?area:area+1'b1;
+     if(x<stats_rd[8:0]) updated_stats[8:0]=x;
+     if(x>stats_rd[17:9]) updated_stats[17:9]=x;
+     if(y<stats_rd[25:18]) updated_stats[25:18]=y;
+     if(y>stats_rd[33:26]) updated_stats[33:26]=y;
+   end
+ end
+ always @(posedge clk or negedge rst_n) begin
+  if(!rst_n) begin
+   state<=IDLE;busy_o<=0;done_o<=0;raw_addr_o<=0;objects_o<=0;valid_o<=0;overflow_o<=0;cycles_o<=0;diagnostic_o<=0;
+   label_we<=0;parent_we<=0;stats_we<=0;label_wa<=0;label_ra<=0;label_wd<=0;
+   parent_wa<=0;parent_ra<=0;parent_wd<=0;stats_wa<=0;stats_ra<=0;stats_wd<=0;
+   index<=0;x<=0;y<=0;left_label<=0;root_min<=0;root<=0;next_label<=1;nb<=0;
+   polarity<=0;second_pass<=0;clear_label<=0;candidate_label<=0;candidates<=0;
+   pending_objects<=0;pending_valid<=0;work_cycles<=0;
+   xmin<=0;xmax<=0;ymin<=0;ymax<=0;width<=0;height<=0;
+   bin_x<=0;bin_y<=0;bx0<=0;bx1<=0;by0<=0;by1<=0;px<=0;py<=0;hits<=0;total<=0;glyph<=0;match_start<=0;glyph_cells<=0;
+   hits_strong<=0;glyph_strong<=0;strong_cells<=0;match_phase<=0;strong_ok<=0;strong_ascii<=0;
+   bbox_we<=0;bbox_wa<=0;bbox_ra<=0;bbox_wd<=0;hier_index<=0;dark_count<=0;
+   prof_top<=0;prof_bottom<=0;prof_left<=0;prof_right<=0;
+   prof_row<=0;prof_col<=0;prof_border<=0;prof_corners<=0;prof_line<=0;prof_middle_max<=0;prof_extrema<=0;
+  end else begin
+   done_o<=0;label_we<=0;parent_we<=0;stats_we<=0;match_start<=0;bbox_we<=0;
+   if(busy_o) work_cycles<=work_cycles+1'b1;
+   if(busy_o&&work_cycles==24'd12000000) begin
+     objects_o<=0;valid_o<=0;overflow_o<=1;diagnostic_o[3]<=1;cycles_o<=work_cycles;done_o<=1;busy_o<=0;state<=IDLE;
+   end else case(state)
+    IDLE:if(start_i) begin
+      busy_o<=1;work_cycles<=0;overflow_o<=0;diagnostic_o<=0;polarity<=0;second_pass<=0;
+      pending_objects<=0;pending_valid<=0;candidates<=0;
+      dark_count<=0;
+      next_label<=1;index<=0;x<=0;y<=0;left_label<=0;state<=RAW_ISS;
+    end
+    RAW_ISS:begin raw_addr_o<=index;state<=RAW_WAIT;end
+    RAW_WAIT:state<=RAW_EVAL;
+    RAW_EVAL:begin
+      if(!raw_data_i[polarity]) begin label_we<=1;label_wa<=index;label_wd<=0;left_label<=0;state<=ADV;end
+      else begin nb<=0;root_min<=0;state<=NB_ISS;end
+    end
+    NB_ISS:begin
+      if(nb==0) begin
+        if(left_label!=0) begin root<=left_label;state<=ROOT_ISS;end
+        else begin nb<=1;state<=NB_ISS;end
+      end else if(y==0||(nb==1&&x==0)||(nb==3&&x==W-1)) begin
+        if(nb==3) state<=ASSIGN;else nb<=nb+1'b1;
+      end else begin
+        case(nb) 1:label_ra<=index-W-1;2:label_ra<=index-W;default:label_ra<=index-W+1;endcase
+        state<=NB_WAIT;
+      end
+    end
+    NB_WAIT:state<=NB_EVAL;
+    NB_EVAL:begin
+      if(label_rd!=0) begin root<=label_rd;state<=ROOT_ISS;end
+      else if(nb==3) state<=ASSIGN;
+      else begin nb<=nb+1'b1;state<=NB_ISS;end
+    end
+    ROOT_ISS:begin parent_ra<=root;state<=ROOT_WAIT;end
+    ROOT_WAIT:state<=ROOT_EVAL;
+    ROOT_EVAL:begin
+      if(parent_rd!=root) begin root<=parent_rd;state<=ROOT_ISS;end
+      else if(second_pass) state<=STATS_ISS;
+      else begin
+        if(root_min==0) root_min<=root;
+        else if(root!=root_min) begin
+          parent_we<=1;parent_wa<=root>root_min?root:root_min;parent_wd<=root<root_min?root:root_min;
+          if(root<root_min) root_min<=root;
+        end
+        if(nb==3) state<=ASSIGN;else begin nb<=nb+1'b1;state<=NB_ISS;end
+      end
+    end
+    ASSIGN:begin
+      if(root_min==0&&next_label==LABEL_COUNT) begin overflow_o<=1;diagnostic_o[3]<=1;pending_valid<=0;state<=PUBLISH;end
+      else begin
+        label_we<=1;label_wa<=index;label_wd<=root_min==0?next_label[LABEL_BITS-1:0]:root_min;
+        left_label<=root_min==0?next_label[LABEL_BITS-1:0]:root_min;
+        if(root_min==0) begin
+          parent_we<=1;parent_wa<=next_label[LABEL_BITS-1:0];parent_wd<=next_label[LABEL_BITS-1:0];next_label<=next_label+1'b1;
+        end
+        state<=ADV;
+      end
+    end
+    ADV:begin
+      if(index==N-1) begin clear_label<=0;state<=CLEAR_STATS;end
+      else begin
+        index<=index+1'b1;
+        if(x==W-1) begin x<=0;y<=y+1'b1;left_label<=0;end else x<=x+1'b1;
+        state<=RAW_ISS;
+      end
+    end
+    CLEAR_STATS:begin
+      stats_we<=1;stats_wa<=clear_label;stats_wd<=0;
+      if(clear_label==LABEL_COUNT-1) begin index<=0;x<=0;y<=0;second_pass<=1;state<=P2_ISS;end
+      else clear_label<=clear_label+1'b1;
+    end
+    P2_ISS:begin label_ra<=index;state<=P2_WAIT;end
+    P2_WAIT:state<=P2_EVAL;
+    P2_EVAL:begin
+      if(label_rd==0) state<=P2_ADV;
+      else begin root<=label_rd;state<=ROOT_ISS;end
+    end
+    STATS_ISS:begin stats_ra<=root;state<=STATS_WAIT;end
+    STATS_WAIT:state<=STATS_WRITE;
+    STATS_WRITE:begin
+      stats_we<=1;stats_wa<=root;stats_wd<=updated_stats;
+      label_we<=1;label_wa<=index;label_wd<=root;state<=P2_ADV;
+    end
+    P2_ADV:begin
+      if(index==N-1) begin candidate_label<=1;state<=CAND_ISS;end
+      else begin
+        index<=index+1'b1;if(x==W-1) begin x<=0;y<=y+1'b1;end else x<=x+1'b1;
+        state<=P2_ISS;
+      end
+    end
+    CAND_ISS:begin stats_ra<=candidate_label;state<=CAND_WAIT;end
+    CAND_WAIT:state<=CAND_EVAL;
+    CAND_EVAL:begin
+      if(area>=16&&box_h<MIN_HEIGHT) diagnostic_o[0]<=1;
+      if(candidate_ok&&candidates<MAX_CANDIDATES) begin
+        xmin<=stats_rd[8:0];xmax<=stats_rd[17:9];ymin<=stats_rd[25:18];ymax<=stats_rd[33:26];
+        width<=box_w;height<=box_h;bin_x<=0;bin_y<=0;glyph<=0;glyph_cells<=0;
+        glyph_strong<=0;strong_cells<=0;match_phase<=0;strong_ok<=0;candidates<=candidates+1'b1;
+        px<=0;py<=0;prof_top<=0;prof_bottom<=0;prof_left<=0;prof_right<=0;
+        prof_row<=0;prof_col<=0;prof_border<=0;prof_corners<=0;prof_line<=0;prof_middle_max<=0;prof_extrema<=0;
+        state<=PROFILE_ISS;
+      end else state<=CAND_ADV;
+    end
+    PROFILE_ISS:begin label_ra<=(ymin+py)*W+xmin+px;state<=PROFILE_WAIT;end
+    PROFILE_WAIT:state<=PROFILE_EVAL;
+    PROFILE_EVAL:begin
+      if(px==width-1) begin
+        if(py>=height/3&&py<=height*3/4&&prof_line+component_pixel>prof_middle_max)
+          prof_middle_max<=prof_line+component_pixel;
+        prof_line<=0;
+      end else if(component_pixel) prof_line<=prof_line+1'b1;
+      if(component_pixel) begin
+        if(px==0&&py==(height>>1)) prof_extrema[0]<=1;
+        if(px==width-1&&py==(height>>1)) prof_extrema[1]<=1;
+        if(py==0&&px==(width>>1)) prof_extrema[2]<=1;
+        if(py==height-1&&px==(width>>1)) prof_extrema[3]<=1;
+        if(py==0) prof_top<=prof_top+1'b1;
+        if(py==height-1) prof_bottom<=prof_bottom+1'b1;
+        if(px==0) prof_left<=prof_left+1'b1;
+        if(px==width-1) prof_right<=prof_right+1'b1;
+        if(py==(height>>1)) prof_row<=prof_row+1'b1;
+        if(px==(width>>1)) prof_col<=prof_col+1'b1;
+        if(px==0||px==width-1||py==0||py==height-1) prof_border<=prof_border+1'b1;
+        if((px==0||px==width-1)&&(py==0||py==height-1)) prof_corners<=prof_corners+1'b1;
+      end
+      if(px==width-1) begin
+        px<=0;if(py==height-1) state<=PROFILE_DECIDE;
+        else begin py<=py+1'b1;state<=PROFILE_ISS;end
+      end else begin px<=px+1'b1;state<=PROFILE_ISS;end
+    end
+    PROFILE_DECIDE:begin
+      if(rectangular_container||triangular_container||round_container) begin diagnostic_o[1]<=1;state<=CAND_ADV;end
+      else if(polarity&&dark_count!=0) begin hier_index<=0;state<=HIER_ISS;end
+      else state<=BIN_SETUP;
+    end
+    HIER_ISS:begin bbox_ra<=hier_index;state<=HIER_WAIT;end
+    HIER_WAIT:state<=HIER_EVAL;
+    HIER_EVAL:begin
+      // 表中沿用 stats 的 {ymax,ymin,xmax,xmin} 布局。
+      if(xmin>=bbox_rd[8:0]&&xmax<=bbox_rd[17:9]&&ymin>=bbox_rd[25:18]&&ymax<=bbox_rd[33:26]) state<=CAND_ADV;
+      else if({1'b0,hier_index}+1>=dark_count) state<=BIN_SETUP;
+      else begin hier_index<=hier_index+1'b1;state<=HIER_ISS;end
+    end
+    BIN_SETUP:begin
+      bx0<=sample_x0;bx1<=sample_x1;by0<=sample_y0;by1<=sample_y1;
+      px<=sample_x0;py<=sample_y0;hits<=0;hits_strong<=0;total<=0;state<=BIN_ISS;
+    end
+    BIN_ISS:begin label_ra<=(ymin+py)*W+xmin+px;raw_addr_o<=(ymin+py)*W+xmin+px;state<=BIN_WAIT;end
+    BIN_WAIT:state<=BIN_EVAL;
+    BIN_EVAL:begin
+      total<=total+1'b1;if(label_rd!=0) hits<=hits+1'b1;
+      if(raw_data_i[2+polarity]) hits_strong<=hits_strong+1'b1;
+      if(px==bx1) begin
+        px<=bx0;if(py==by1) state<=BIN_STORE;else begin py<=py+1'b1;state<=BIN_ISS;end
+      end else begin px<=px+1'b1;state<=BIN_ISS;end
+    end
+    BIN_STORE:begin
+      glyph[8'd255-{bin_y,bin_x}]<=bin_foreground;
+      if(bin_foreground) glyph_cells<=glyph_cells+1'b1;
+      glyph_strong[8'd255-{bin_y,bin_x}]<=total!=0&&({2'b0,hits_strong}<<2)>=total;
+      if(total!=0&&({2'b0,hits_strong}<<2)>=total) strong_cells<=strong_cells+1'b1;
+      if(bin_x==15) begin
+        bin_x<=0;if(bin_y==15) state<=MATCH_START;else begin bin_y<=bin_y+1'b1;state<=BIN_SETUP;end
+      end else begin bin_x<=bin_x+1'b1;state<=BIN_SETUP;end
+    end
+    MATCH_START:begin match_start<=1;state<=MATCH_WAIT;end
+    MATCH_WAIT:if(match_done) begin
+      if(!match_phase) begin
+        strong_ok<=recognized;strong_ascii<=matched_ascii;match_phase<=1;state<=MATCH_START;
+      end else begin
+        if(!nested&&free_index<0&&(strong_ok||recognized)&&(!strong_ok||!recognized||strong_ascii==matched_ascii)) diagnostic_o[2]<=1;
+        // 两种采样均有高置信结果但类别不同则拒识，不以更松采样强行覆盖。
+        if(!nested&&free_index>=0&&(strong_ok||recognized)&&(!strong_ok||!recognized||strong_ascii==matched_ascii)) begin
+          for(store_index=0;store_index<MAX_OBJECTS;store_index=store_index+1)
+            if(free_index==store_index) pending_objects[store_index*42+:42]<={strong_ok?strong_ascii:matched_ascii,xmin,xmax,ymin,ymax};
+          pending_valid<=keep_valid|({{(MAX_OBJECTS-1){1'b0}},1'b1}<<free_index);
+          // Only an accepted dark character can suppress its inverse holes.
+          // Rejected table/frame candidates must never suppress their contents.
+          if(!polarity&&dark_count<64) begin
+            bbox_we<=1;bbox_wa<=dark_count[5:0];bbox_wd<={ymax,ymin,xmax,xmin};dark_count<=dark_count+1'b1;
+          end
+        end
+        state<=CAND_ADV;
+      end
+    end
+    CAND_ADV:begin
+      if(candidate_label==LABEL_COUNT-1||candidates>=MAX_CANDIDATES) state<=NEXT_POLARITY;
+      else begin candidate_label<=candidate_label+1'b1;state<=CAND_ISS;end
+    end
+    NEXT_POLARITY:begin
+      if(polarity) state<=PUBLISH;
+      else begin polarity<=1;second_pass<=0;candidates<=0;next_label<=1;index<=0;x<=0;y<=0;left_label<=0;state<=RAW_ISS;end
+    end
+    PUBLISH:begin objects_o<=pending_objects;valid_o<=pending_valid;done_o<=1;busy_o<=0;cycles_o<=work_cycles;state<=IDLE;end
+    default:state<=IDLE;
+   endcase
+  end
+ end
+endmodule

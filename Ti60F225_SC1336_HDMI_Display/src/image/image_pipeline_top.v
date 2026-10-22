@@ -121,7 +121,10 @@ module image_pipeline_top #(
     output wire        dbg_cond_seen_o,
     output wire        dbg_link_seen_o,
     input wire [7:0] temporal_y_i,
-    input wire temporal_de_i,temporal_vs_i
+    input wire temporal_de_i,temporal_vs_i,
+    output wire        dbg_edge_o,
+    output wire        dbg_edge_de_o,
+    output wire        dbg_edge_vs_o
 );
 
     localparam CANNY_LAT = 12;
@@ -265,6 +268,9 @@ module image_pipeline_top #(
     wire        can_link_en;          // ★诊断：link_en_active 实际值
     wire        can_cond_seen;        // ★诊断：本帧出现过 cond
     wire        can_link_seen;        // ★诊断：本帧出现过 link
+    assign dbg_edge_o=can_edge;
+    assign dbg_edge_de_o=can_de;
+    assign dbg_edge_vs_o=can_vs;
 
     // 单一阈值口 → 双阈值（2:1），见文件头的【thr_i】
     wire [7:0]  thr_high = thr_i;

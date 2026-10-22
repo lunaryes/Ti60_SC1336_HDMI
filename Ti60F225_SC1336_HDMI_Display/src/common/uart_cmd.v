@@ -112,6 +112,8 @@ module uart_cmd #(
     // 所以"不插串口"和"插了不用"两种情况下画面与改动前逐像素一致。
     output reg  [7:0] gain_r_o,
     output reg  [7:0] gain_b_o,
+    // UART 'E' controls OCR annotation; 'O' remains DDR replay divider.
+    output reg        ocr_enable_o,
 
     // M6 增量端口（只增不改）：直方图请求与 TX 忙标志
     output reg [2:0] play_mode_o,
@@ -210,7 +212,7 @@ module uart_cmd #(
     //-----------------------------------------------------------------
     localparam [7:0] C_T = 8'h54, C_V = 8'h56, C_M = 8'h4D, C_R = 8'h52,
                      C_A = 8'h41, C_B = 8'h42, C_H = 8'h48, C_S = 8'h53,
-                     C_L = 8'h4C, C_Q=8'h51, C_P=8'h50, C_N=8'h4e, C_J=8'h4a, C_K=8'h4b, C_O=8'h4f, C_F=8'h46, C_D=8'h44;
+                     C_L = 8'h4C, C_Q=8'h51, C_P=8'h50, C_N=8'h4e, C_J=8'h4a, C_K=8'h4b, C_O=8'h4f, C_F=8'h46, C_D=8'h44, C_E=8'h45;
 
     reg       p_wait;                 // 正在等参数字节
     reg [31:0] snapshot_strong,snapshot_weak,snapshot_bypass;
@@ -230,6 +232,7 @@ module uart_cmd #(
             link_o   <= LINK_DEF;
             gain_r_o <= GAIN_R_DEF;
             gain_b_o <= GAIN_B_DEF;
+            ocr_enable_o <= 1'b1;
             p_wait     <= 1'b0;
             p_cmd      <= 8'd0;
             tx_req     <= 1'b0;
@@ -257,7 +260,7 @@ module uart_cmd #(
             if (rx_valid) begin
                 if (!p_wait) begin
                     case (rx_byte)
-                        C_T, C_V, C_M, C_A, C_B, C_S, C_L, C_P, C_N, C_J, C_K, C_O, C_F,8'h59,8'h5a: begin
+                        C_T, C_V, C_M, C_A, C_B, C_S, C_L, C_P, C_N, C_J, C_K, C_O, C_F, C_E,8'h59,8'h5a: begin
                             p_cmd  <= rx_byte;
                             p_wait <= 1'b1;
                         end
@@ -326,6 +329,7 @@ module uart_cmd #(
                         C_A:     gain_r_o <= rx_byte;
                         C_B:     gain_b_o <= rx_byte;
                         C_L:     link_o   <= rx_byte[0];
+                        C_E:     ocr_enable_o <= rx_byte[0];
                         default: ;
                     endcase
                     p_wait <= 1'b0;
