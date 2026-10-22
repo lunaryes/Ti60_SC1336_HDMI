@@ -23,7 +23,6 @@ module vision_label_cn(
    4:case(cell_index) 0:cn_id=7;1:cn_id=3;default:cn_id=0;endcase
    5:case(cell_index) 0:cn_id=8;1:cn_id=7;default:cn_id=0;endcase
    6:case(cell_index) 0:cn_id=9;1:cn_id=10;2:cn_id=3;default:cn_id=0;endcase
-   7:case(cell_index) 0:cn_id=11;1:cn_id=10;2:cn_id=3;default:cn_id=0;endcase
    8:case(cell_index) 0:cn_id=12;1:cn_id=13;2:cn_id=3;default:cn_id=0;endcase
    9:case(cell_index) 0:cn_id=14;1:cn_id=10;2:cn_id=3;default:cn_id=0;endcase
    default:cn_id=0;

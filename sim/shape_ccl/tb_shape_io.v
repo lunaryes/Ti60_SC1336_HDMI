@@ -5,7 +5,7 @@ module tb_shape_io;
  shape_frame_capture #(.IMG_W(32),.IMG_H(32)) cap(clk,rst,vs,de,edge_bit,busy,ready,ra,rd);
  always @(posedge clk) if(ready) ready_count<=ready_count+1;
  reg [10:0] ox=0;reg [9:0] oy=0;reg ode=1,en=0;
- reg [143:0] boxes=0;reg [3:0] valid=0;
+ reg [287:0] boxes=0;reg [7:0] valid=0;
  wire [23:0] rgb;
  shape_geometry_overlay ov(ox,oy,ode,en,24'h123456,boxes,valid,rgb);
  task frame;
@@ -32,7 +32,9 @@ module tb_shape_io;
   for(y=0;y<720;y=y+13) for(x=0;x<1280;x=x+11) begin
    ox=x;oy=y;en=0;#1;if(rgb!==24'h123456) $fatal(1,"disabled passthrough");
    en=1;ode=0;#1;if(rgb!==24'h123456) $fatal(1,"blanking passthrough");ode=1;
-   if(x<160||x>567||y<120||y>527) begin #1;if(rgb!==24'h123456) $fatal(1,"unannotated passthrough");end
+   if((x<160||x>567||y<120||y>527)&&!(x>=160&&x<256&&y>=86&&y<118)) begin
+    #1;if(rgb!==24'h123456) $fatal(1,"unannotated passthrough");
+   end
   end
   $display("PASS frame pool, last-pixel write, busy skip, overlay passthrough");$finish;
  end

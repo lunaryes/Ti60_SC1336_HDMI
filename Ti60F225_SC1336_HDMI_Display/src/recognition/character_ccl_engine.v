@@ -4,13 +4,15 @@
 // 裁剪内保留同极性的其它笔画，不能把“脸框里的眼鼻嘴”抹掉后误当 O。
 module character_ccl_engine #(
  parameter integer W=320,H=180,AW=$clog2(W*H),MAX_CANDIDATES=64,
- parameter integer MIN_HEIGHT=10,MAX_HEIGHT=128,LABEL_BITS=10
+ parameter integer MIN_HEIGHT=6,MAX_HEIGHT=128,LABEL_BITS=11,MAX_OBJECTS=8
 )(
  input wire clk,rst_n,start_i,output reg busy_o,done_o,
  output reg [AW-1:0] raw_addr_o,input wire [3:0] raw_data_i,
  // 每项 {ASCII[7:0],xmin[8:0],xmax[8:0],ymin[7:0],ymax[7:0]}。
- output reg [167:0] objects_o,output reg [3:0] valid_o,
- output reg overflow_o,output reg [23:0] cycles_o
+ output reg [MAX_OBJECTS*42-1:0] objects_o,output reg [MAX_OBJECTS-1:0] valid_o,
+ output reg overflow_o,output reg [23:0] cycles_o,
+ // Sticky per-analysis diagnostics: {overflow, capacity, container, too_small}.
+ output reg [3:0] diagnostic_o
 );
  localparam integer N=W*H, LABEL_COUNT=1<<LABEL_BITS;
  localparam IDLE=0,RAW_ISS=1,RAW_WAIT=2,RAW_EVAL=3,NB_ISS=4,NB_WAIT=5,NB_EVAL=6,
@@ -19,7 +21,8 @@ module character_ccl_engine #(
    STATS_WRITE=18,P2_ADV=19,CAND_ISS=20,CAND_WAIT=21,CAND_EVAL=22,
    BIN_SETUP=23,BIN_ISS=24,BIN_WAIT=25,BIN_EVAL=26,BIN_STORE=27,
    MATCH_START=28,MATCH_WAIT=29,CAND_ADV=30,NEXT_POLARITY=31,PUBLISH=32,
-   HIER_ISS=33,HIER_WAIT=34,HIER_EVAL=35;
+   HIER_ISS=33,HIER_WAIT=34,HIER_EVAL=35,
+   PROFILE_ISS=36,PROFILE_WAIT=37,PROFILE_EVAL=38,PROFILE_DECIDE=39;
  reg [5:0] state;reg polarity,second_pass;
  reg label_we,parent_we,stats_we;
  reg [AW-1:0] label_wa,label_ra;reg [LABEL_BITS-1:0] label_wd;wire [LABEL_BITS-1:0] label_rd;
@@ -32,7 +35,7 @@ module character_ccl_engine #(
  reg [LABEL_BITS-1:0] left_label,root_min,root;
  reg [LABEL_BITS:0] next_label;reg [1:0] nb;
  reg [LABEL_BITS-1:0] clear_label,candidate_label;reg [7:0] candidates;
- reg [1:0] object_count;reg [167:0] pending_objects;reg [3:0] pending_valid;
+ reg [MAX_OBJECTS*42-1:0] pending_objects;reg [MAX_OBJECTS-1:0] pending_valid;
  reg [23:0] work_cycles;
  reg bbox_we;reg [5:0] bbox_wa,bbox_ra,hier_index;reg [33:0] bbox_wd;wire [33:0] bbox_rd;
  reg [6:0] dark_count;
@@ -44,10 +47,31 @@ module character_ccl_engine #(
  wire [15:0] area=stats_rd[49:34];
  wire candidate_ok=area>=16 && box_h>=MIN_HEIGHT && box_h<=MAX_HEIGHT && box_w>=2&&box_w<=128&&
    stats_rd[8:0]>1&&stats_rd[17:9]<W-2&&stats_rd[25:18]>1&&stats_rd[33:26]<H-2&&
-   box_w*8>=box_h && box_w*2<=box_h*3 && area*12>=box_area &&
+   box_w*8>=box_h && box_w*2<=box_h*3 && ((box_h<12)?area*20>=box_area:area*12>=box_area) &&
    (area*8<box_area*7 || box_w*4<box_h);
  reg [3:0] bin_x,bin_y;reg [8:0] bx0,bx1,px;reg [7:0] by0,by1,py;
  reg [9:0] width;reg [8:0] height;
+ // Count each component pixel once, before the 16x16 resampler duplicates
+ // small glyph pixels. A rectangular container is not a character candidate.
+ reg [9:0] prof_top,prof_bottom,prof_left,prof_right,prof_row,prof_col;
+ reg [10:0] prof_border;reg [2:0] prof_corners;
+ reg [9:0] prof_line,prof_middle_max;reg [3:0] prof_extrema;
+ wire component_pixel=label_rd==candidate_label;
+ wire rectangular_container=width>=8&&height>=8&&prof_corners>=3&&
+   prof_top*10>=width*6&&prof_bottom*10>=width*6&&
+   prof_left*10>=height*6&&prof_right*10>=height*6&&
+   prof_row*10<=width*3&&prof_col*10<=height*3&&
+   prof_border*10>=((width+height)*2-4)*6;
+ // Closed geometric outlines can resemble O or V after resampling. Reject
+ // evidence-backed thin triangular frames, not an open V or a T with a stem.
+ wire triangular_container=width>=8&&height>=8&&
+   ((prof_top*10>=width*7&&prof_bottom*10<=width*3)||
+    (prof_bottom*10>=width*7&&prof_top*10<=width*3))&&
+   prof_middle_max*10<=width*3&&prof_col*10<=height*3;
+ // A nearly circular thin outline is intrinsically ambiguous with letter O.
+ // Leave this case to the geometry branch; narrow digit 0 is not excluded.
+ wire round_container=width>=12&&height>=12&&width*10>=height*9&&width*9<=height*10&&
+   area*5<width*height&&(&prof_extrema)&&prof_row*10<=width*3&&prof_col*10<=height*3;
  wire [13:0] xb0=bin_x*width+15;
  wire [13:0] xb1=({1'b0,bin_x}+1'b1)*width+15;
  wire [12:0] yb0=bin_y*height+15;
@@ -64,10 +88,10 @@ module character_ccl_engine #(
  wire glyph_valid=(match_phase?glyph_cells:strong_cells)<=216||width*4<height;
  wire match_done,recognized;wire [5:0] matched_class;wire [7:0] matched_ascii;
  wire [8:0] best,second;wire [255:0] matched_template;
- integer oi,free_index;reg nested;reg [41:0] existing;reg [3:0] keep_valid;
+ integer oi,free_index,store_index;reg nested;reg [41:0] existing;reg [MAX_OBJECTS-1:0] keep_valid;
  always @(*) begin
   nested=0;existing=0;keep_valid=pending_valid;free_index=-1;
-  for(oi=0;oi<4;oi=oi+1) begin
+  for(oi=0;oi<MAX_OBJECTS;oi=oi+1) begin
    existing=pending_objects[oi*42+:42];
    if(pending_valid[oi]&&xmin>=existing[33:25]&&xmax<=existing[24:16]&&
       ymin>=existing[15:8]&&ymax<=existing[7:0]) nested=1;
@@ -75,7 +99,7 @@ module character_ccl_engine #(
    if(polarity&&pending_valid[oi]&&xmin<=existing[33:25]&&xmax>=existing[24:16]&&
       ymin<=existing[15:8]&&ymax>=existing[7:0]) keep_valid[oi]=0;
   end
-  for(oi=3;oi>=0;oi=oi-1) if(!keep_valid[oi]) free_index=oi;
+  for(oi=MAX_OBJECTS-1;oi>=0;oi=oi-1) if(!keep_valid[oi]) free_index=oi;
  end
  character_matcher16 u_matcher(.clk(clk),.rst_n(rst_n),.start_i(match_start),.candidate_valid_i(glyph_valid),
    .glyph_i(match_phase?glyph:glyph_strong),.width_i({1'b0,width}),.height_i({1'b0,height}),.result_valid_o(match_done),
@@ -95,25 +119,27 @@ module character_ccl_engine #(
  end
  always @(posedge clk or negedge rst_n) begin
   if(!rst_n) begin
-   state<=IDLE;busy_o<=0;done_o<=0;raw_addr_o<=0;objects_o<=0;valid_o<=0;overflow_o<=0;cycles_o<=0;
+   state<=IDLE;busy_o<=0;done_o<=0;raw_addr_o<=0;objects_o<=0;valid_o<=0;overflow_o<=0;cycles_o<=0;diagnostic_o<=0;
    label_we<=0;parent_we<=0;stats_we<=0;label_wa<=0;label_ra<=0;label_wd<=0;
    parent_wa<=0;parent_ra<=0;parent_wd<=0;stats_wa<=0;stats_ra<=0;stats_wd<=0;
    index<=0;x<=0;y<=0;left_label<=0;root_min<=0;root<=0;next_label<=1;nb<=0;
    polarity<=0;second_pass<=0;clear_label<=0;candidate_label<=0;candidates<=0;
-   object_count<=0;pending_objects<=0;pending_valid<=0;work_cycles<=0;
+   pending_objects<=0;pending_valid<=0;work_cycles<=0;
    xmin<=0;xmax<=0;ymin<=0;ymax<=0;width<=0;height<=0;
    bin_x<=0;bin_y<=0;bx0<=0;bx1<=0;by0<=0;by1<=0;px<=0;py<=0;hits<=0;total<=0;glyph<=0;match_start<=0;glyph_cells<=0;
    hits_strong<=0;glyph_strong<=0;strong_cells<=0;match_phase<=0;strong_ok<=0;strong_ascii<=0;
    bbox_we<=0;bbox_wa<=0;bbox_ra<=0;bbox_wd<=0;hier_index<=0;dark_count<=0;
+   prof_top<=0;prof_bottom<=0;prof_left<=0;prof_right<=0;
+   prof_row<=0;prof_col<=0;prof_border<=0;prof_corners<=0;prof_line<=0;prof_middle_max<=0;prof_extrema<=0;
   end else begin
    done_o<=0;label_we<=0;parent_we<=0;stats_we<=0;match_start<=0;bbox_we<=0;
    if(busy_o) work_cycles<=work_cycles+1'b1;
    if(busy_o&&work_cycles==24'd12000000) begin
-     objects_o<=0;valid_o<=0;overflow_o<=1;cycles_o<=work_cycles;done_o<=1;busy_o<=0;state<=IDLE;
+     objects_o<=0;valid_o<=0;overflow_o<=1;diagnostic_o[3]<=1;cycles_o<=work_cycles;done_o<=1;busy_o<=0;state<=IDLE;
    end else case(state)
     IDLE:if(start_i) begin
-      busy_o<=1;work_cycles<=0;overflow_o<=0;polarity<=0;second_pass<=0;
-      pending_objects<=0;pending_valid<=0;object_count<=0;candidates<=0;
+      busy_o<=1;work_cycles<=0;overflow_o<=0;diagnostic_o<=0;polarity<=0;second_pass<=0;
+      pending_objects<=0;pending_valid<=0;candidates<=0;
       dark_count<=0;
       next_label<=1;index<=0;x<=0;y<=0;left_label<=0;state<=RAW_ISS;
     end
@@ -155,7 +181,7 @@ module character_ccl_engine #(
       end
     end
     ASSIGN:begin
-      if(root_min==0&&next_label==LABEL_COUNT) begin overflow_o<=1;pending_valid<=0;state<=PUBLISH;end
+      if(root_min==0&&next_label==LABEL_COUNT) begin overflow_o<=1;diagnostic_o[3]<=1;pending_valid<=0;state<=PUBLISH;end
       else begin
         label_we<=1;label_wa<=index;label_wd<=root_min==0?next_label[LABEL_BITS-1:0]:root_min;
         left_label<=root_min==0?next_label[LABEL_BITS-1:0]:root_min;
@@ -200,16 +226,47 @@ module character_ccl_engine #(
     CAND_ISS:begin stats_ra<=candidate_label;state<=CAND_WAIT;end
     CAND_WAIT:state<=CAND_EVAL;
     CAND_EVAL:begin
+      if(area>=16&&box_h<MIN_HEIGHT) diagnostic_o[0]<=1;
       if(candidate_ok&&candidates<MAX_CANDIDATES) begin
         xmin<=stats_rd[8:0];xmax<=stats_rd[17:9];ymin<=stats_rd[25:18];ymax<=stats_rd[33:26];
         width<=box_w;height<=box_h;bin_x<=0;bin_y<=0;glyph<=0;glyph_cells<=0;
         glyph_strong<=0;strong_cells<=0;match_phase<=0;strong_ok<=0;candidates<=candidates+1'b1;
-        if(!polarity) begin
-          if(dark_count<64) begin bbox_we<=1;bbox_wa<=dark_count[5:0];bbox_wd<=stats_rd[33:0];dark_count<=dark_count+1'b1;end
-          state<=BIN_SETUP;
-        end else if(dark_count!=0) begin hier_index<=0;state<=HIER_ISS;end
-        else state<=BIN_SETUP;
+        px<=0;py<=0;prof_top<=0;prof_bottom<=0;prof_left<=0;prof_right<=0;
+        prof_row<=0;prof_col<=0;prof_border<=0;prof_corners<=0;prof_line<=0;prof_middle_max<=0;prof_extrema<=0;
+        state<=PROFILE_ISS;
       end else state<=CAND_ADV;
+    end
+    PROFILE_ISS:begin label_ra<=(ymin+py)*W+xmin+px;state<=PROFILE_WAIT;end
+    PROFILE_WAIT:state<=PROFILE_EVAL;
+    PROFILE_EVAL:begin
+      if(px==width-1) begin
+        if(py>=height/3&&py<=height*3/4&&prof_line+component_pixel>prof_middle_max)
+          prof_middle_max<=prof_line+component_pixel;
+        prof_line<=0;
+      end else if(component_pixel) prof_line<=prof_line+1'b1;
+      if(component_pixel) begin
+        if(px==0&&py==(height>>1)) prof_extrema[0]<=1;
+        if(px==width-1&&py==(height>>1)) prof_extrema[1]<=1;
+        if(py==0&&px==(width>>1)) prof_extrema[2]<=1;
+        if(py==height-1&&px==(width>>1)) prof_extrema[3]<=1;
+        if(py==0) prof_top<=prof_top+1'b1;
+        if(py==height-1) prof_bottom<=prof_bottom+1'b1;
+        if(px==0) prof_left<=prof_left+1'b1;
+        if(px==width-1) prof_right<=prof_right+1'b1;
+        if(py==(height>>1)) prof_row<=prof_row+1'b1;
+        if(px==(width>>1)) prof_col<=prof_col+1'b1;
+        if(px==0||px==width-1||py==0||py==height-1) prof_border<=prof_border+1'b1;
+        if((px==0||px==width-1)&&(py==0||py==height-1)) prof_corners<=prof_corners+1'b1;
+      end
+      if(px==width-1) begin
+        px<=0;if(py==height-1) state<=PROFILE_DECIDE;
+        else begin py<=py+1'b1;state<=PROFILE_ISS;end
+      end else begin px<=px+1'b1;state<=PROFILE_ISS;end
+    end
+    PROFILE_DECIDE:begin
+      if(rectangular_container||triangular_container||round_container) begin diagnostic_o[1]<=1;state<=CAND_ADV;end
+      else if(polarity&&dark_count!=0) begin hier_index<=0;state<=HIER_ISS;end
+      else state<=BIN_SETUP;
     end
     HIER_ISS:begin bbox_ra<=hier_index;state<=HIER_WAIT;end
     HIER_WAIT:state<=HIER_EVAL;
@@ -246,10 +303,17 @@ module character_ccl_engine #(
       if(!match_phase) begin
         strong_ok<=recognized;strong_ascii<=matched_ascii;match_phase<=1;state<=MATCH_START;
       end else begin
+        if(!nested&&free_index<0&&(strong_ok||recognized)&&(!strong_ok||!recognized||strong_ascii==matched_ascii)) diagnostic_o[2]<=1;
         // 两种采样均有高置信结果但类别不同则拒识，不以更松采样强行覆盖。
         if(!nested&&free_index>=0&&(strong_ok||recognized)&&(!strong_ok||!recognized||strong_ascii==matched_ascii)) begin
-          pending_objects[free_index*42+:42]<={strong_ok?strong_ascii:matched_ascii,xmin,xmax,ymin,ymax};
-          pending_valid<=keep_valid|(4'b1<<free_index);
+          for(store_index=0;store_index<MAX_OBJECTS;store_index=store_index+1)
+            if(free_index==store_index) pending_objects[store_index*42+:42]<={strong_ok?strong_ascii:matched_ascii,xmin,xmax,ymin,ymax};
+          pending_valid<=keep_valid|({{(MAX_OBJECTS-1){1'b0}},1'b1}<<free_index);
+          // Only an accepted dark character can suppress its inverse holes.
+          // Rejected table/frame candidates must never suppress their contents.
+          if(!polarity&&dark_count<64) begin
+            bbox_we<=1;bbox_wa<=dark_count[5:0];bbox_wd<={ymax,ymin,xmax,xmin};dark_count<=dark_count+1'b1;
+          end
         end
         state<=CAND_ADV;
       end

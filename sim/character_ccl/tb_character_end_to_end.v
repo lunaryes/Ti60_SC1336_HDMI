@@ -1,8 +1,8 @@
 `timescale 1ns/1ps
 module tb_character_end_to_end;
  reg clk=0,rst=0,vs=0,de=0;reg [7:0] gray=255;always #5 clk=~clk;
- wire [167:0] objects;wire [3:0] valid;wire busy,overflow;wire [7:0] threshold;
- character_detection_top dut(clk,rst,vs,de,gray,objects,valid,busy,overflow,threshold);
+ wire [335:0] objects;wire [7:0] valid;wire busy,overflow;wire [7:0] threshold;
+ character_detection_top dut(clk,rst,vs,de,gray,objects,valid,busy,overflow,threshold,);
  reg [7:0] image[0:1280*720-1];reg [2047:0] filename;integer x,y,t;
  task frame;
  begin
@@ -13,9 +13,9 @@ module tb_character_end_to_end;
    de=0;gray=255;repeat(4) @(negedge clk);
   end
   repeat(50) @(negedge clk);
-  t=0;while(busy&&t<12100000) begin @(negedge clk);t=t+1;end
+  t=0;while(busy&&t<14100000) begin @(negedge clk);t=t+1;end
   if(busy||overflow) $fatal(1,"engine timeout/overflow");
-  repeat(80) @(negedge clk); // 空间跟踪 FSM 完成后，再模拟下一场边界。
+  repeat(250) @(negedge clk); // 空间跟踪 FSM 完成后，再模拟下一场边界。
  end endtask
  initial begin
   if(!$value$plusargs("FILE=%s",filename)) $fatal(1,"FILE required");$readmemh(filename,image);

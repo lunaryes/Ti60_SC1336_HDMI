@@ -3,7 +3,7 @@ import pathlib,subprocess,re,sys,json,hashlib
 from concurrent.futures import ThreadPoolExecutor,as_completed
 from PIL import Image,ImageFont,ImageDraw,ImageOps,ImageFilter,ImageChops
 HERE=pathlib.Path(__file__).resolve().parent
-SRC=HERE.parent/'src'
+SRC=HERE.parents[1]/'src'
 if not (SRC/'character_ccl_engine.v').exists():SRC=HERE.parents[1]/'Ti60F225_SC1336_HDMI_Display'/'src'/'recognition'
 OLD=SRC if (SRC/'ocr_font16_rom.v').exists() else pathlib.Path(r'E:\fpga\Ti60_SC1336_HDMI\Ti60F225_SC1336_HDMI_Display\src\recognition')
 TOOL=pathlib.Path(r'F:\codex\tools\iverilog\bin')
@@ -52,6 +52,32 @@ if '--outline' in sys.argv:
   im.paste(edge,(300,220));cases.append(('outline_'+text,im,text))
  for text in '127':
   im=Image.new('L',(1280,720),255);im.paste(glyph(text,'timesbi.ttf',160),(300,220));cases.append(('serif_italic_'+text,im,text))
+if '--joint' in sys.argv:
+ for text in '247AB':
+  for size in (36,44):
+   im=Image.new('L',(1280,720),255);im.paste(glyph(text,size=size),(300,220))
+   cases.append((f'small_{text}_{size}',im,text))
+ for grid in (False,True):
+  im=Image.new('L',(1280,720),255);d=ImageDraw.Draw(im)
+  for row in range(2):
+   for col,text in enumerate('2478'):
+    xx=120+col*220;yy=120+row*240
+    if grid:d.rectangle((xx,yy,xx+190,yy+200),outline=0,width=5)
+    im.paste(glyph(text,size=110),(xx+45,yy+30))
+  cases.append(('eight_grid' if grid else 'eight_digits',im,'24782478'))
+ for grid in (False,True):
+  im=Image.new('L',(1280,720),255);d=ImageDraw.Draw(im)
+  for row in range(3):
+   for col in range(3):
+    xx=100+col*330;yy=40+row*215
+    if grid:d.rectangle((xx,yy,xx+290,yy+190),outline=0,width=5)
+    im.paste(glyph('4',size=110),(xx+100,yy+30))
+  cases.append(('nine_grid' if grid else 'nine_digits',im,'44444444'))
+ im=Image.new('L',(1280,720),255);d=ImageDraw.Draw(im)
+ d.rectangle((120,60,340,280),outline=0,width=5);d.ellipse((450,60,670,280),outline=0,width=5)
+ d.polygon([(800,60),(1000,60),(900,280)],outline=0,width=5)
+ for col,text in enumerate('2478'):im.paste(glyph(text,size=110),(120+col*230,440))
+ cases.append(('mixed_shapes_digits',im,'2478'))
 selected=[a for a in sys.argv[1:] if not a.startswith('--')]
 tasks=[]
 for name,im,want in cases:
@@ -70,9 +96,11 @@ def run_one(task):
  m=re.search(r'RESULT valid=(\w+) overflow=(\d) cycles=(\d+) ascii=(.*)',res)
  if not m:raise RuntimeError(res)
  got=m[4].strip();ok=sorted(want)==sorted(got) and m[2]=='0'
+ diag=re.search(r'DIAGNOSTIC ([0-9a-fA-F]+)',res);diag=int(diag[1],16) if diag else None
+ if name.startswith('nine_'):ok=ok and diag is not None and bool(diag&4)
  return dict(name=name,expected=want,actual=got,passed=ok,
              safe_reject=(name=='full_O' and got=='' and m[2]=='0'),
-             overflow=int(m[2]),cycles=int(m[3]))
+             overflow=int(m[2]),cycles=int(m[3]),diagnostic=diag)
 fail=[];results=[]
 with ThreadPoolExecutor(max_workers=3) as pool:
  for result in as_completed([pool.submit(run_one,t) for t in tasks]):

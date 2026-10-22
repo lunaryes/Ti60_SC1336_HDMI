@@ -1,12 +1,12 @@
 `timescale 1ns/1ps
 module tb_character_stability;
  reg clk=0,rst=0,vs=0;always #5 clk=~clk;
- wire [167:0] objects;wire [3:0] valid;wire busy,overflow;wire [7:0] threshold;
- reg done=0,over=0;reg [167:0] raw_objects=0;reg [3:0] raw_valid=0;
- character_detection_top dut(clk,rst,vs,1'b0,8'd255,objects,valid,busy,overflow,threshold);
- task result;begin @(negedge clk);done=1;@(negedge clk);done=0;repeat(60) @(negedge clk);end endtask
+ wire [335:0] objects;wire [7:0] valid;wire busy,overflow;wire [7:0] threshold;
+ reg done=0,over=0;reg [335:0] raw_objects=0;reg [7:0] raw_valid=0;
+ character_detection_top dut(clk,rst,vs,1'b0,8'd255,objects,valid,busy,overflow,threshold,);
+ task result;begin @(negedge clk);done=1;@(negedge clk);done=0;repeat(250) @(negedge clk);end endtask
  task boundary;begin @(negedge clk);vs=1;@(negedge clk);vs=0;end endtask
- integer i;
+ integer i;reg [8:0] test_x;
  initial begin
   force dut.done=done;force dut.raw_objects=raw_objects;force dut.raw_valid=raw_valid;
   force dut.contrast=1'b1;force dut.overflow_o=over;
@@ -27,6 +27,11 @@ module tb_character_stability;
   over=1;result();boundary();if(valid!=0) $fatal(1,"overflow must reject");
   over=0;result();result();result();boundary();if(valid!=1) $fatal(1,"recovery failed");
   for(i=0;i<26;i=i+1) boundary();if(valid!=0) $fatal(1,"expired label");
+  raw_objects=0;raw_valid=8'hff;
+  for(i=0;i<8;i=i+1) begin test_x=20+i*35;raw_objects[i*42+:42]={8'h34,test_x,test_x+9'd15,8'd20,8'd50};end
+  result();result();result();boundary();if(valid!=8'hff) $fatal(1,"eight tracks did not confirm");
+  for(i=0;i<8;i=i+1) begin test_x=20+(7-i)*35;raw_objects[i*42+:42]={8'h34,test_x,test_x+9'd15,8'd20,8'd50};end
+  result();boundary();if(valid!=8'hff) $fatal(1,"eight-track permutation lost targets");
   $display("PASS position association, slot permutation, three confirmations, one-miss hold, expiry and overflow");$finish;
  end
 endmodule

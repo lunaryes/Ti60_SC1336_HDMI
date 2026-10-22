@@ -5,7 +5,7 @@
 // components; Moore tracing measures the OUTER enclosed area (hollow-safe).
 // Ramer-Douglas-Peucker vertices supplement circularity to distinguish polygons.
 module shape_geometry_engine #(
-    parameter integer W=160,H=90,AW=$clog2(W*H),MAX_OBJECTS=4,
+    parameter integer W=160,H=90,AW=$clog2(W*H),MAX_OBJECTS=8,
     parameter integer MAX_TRACE=4096,PAW=$clog2(MAX_TRACE),MIN_AREA=36
 )(
     input wire clk,rst_n,start_i,
@@ -101,7 +101,7 @@ module shape_geometry_engine #(
     reg [5:0] sp;
     reg [PAW-1:0] sa,sb,pi,max_index;
     reg [7:0] ax,ay,bx,by;
-    reg [4:0] vertices;
+    reg [4:0] vertices,curved_leaves;
     reg [7:0] vx[0:15],vy[0:15];
     reg [7:0] epsilon2;
     reg [19:0] chord2;
@@ -150,7 +150,7 @@ module shape_geometry_engine #(
         xmin<=0;xmax<=0;ymin<=0;ymax<=0;neighbor<=0;morph_pass<=0;morph_acc<=0;
         component_pixels<=0;work_cycles<=0;reject_count<=0;pending_objects<=0;pending_valid<=0;object_count<=0;
         search_dir<=4;first_x<=0;first_y<=0;attempts<=0;trace_count<=0;trace_end<=0;far_index<=0;perimeter10<=0;area_acc<=0;area2<=0;far_distance<=0;
-        sp<=0;sa<=0;sb<=0;pi<=0;max_index<=0;ax<=0;ay<=0;bx<=0;by<=0;vertices<=0;epsilon2<=0;chord2<=0;
+        sp<=0;sa<=0;sb<=0;pi<=0;max_index<=0;ax<=0;ay<=0;bx<=0;by<=0;vertices<=0;curved_leaves<=0;epsilon2<=0;chord2<=0;
         max_cross<=0;cross_square<=0;rdp_limit<=0;circularity_num<=0;perimeter_square<=0;bbox_area<=0;vi<=0;shift_index<=0;remove_index<=0;
         convex<=1;turn_set<=0;turn_sign<=0;orthogonal<=1;axis_edges<=0;min_side<=20'hfffff;max_side<=0;
         left_vertices<=0;right_vertices<=0;top_vertices<=0;bottom_vertices<=0;dot_square<=0;side_product<=0;shape_class<=0;
@@ -159,7 +159,7 @@ module shape_geometry_engine #(
       end else begin
         result_valid_o<=0;temp_we<=0;work_we<=0;visited_we<=0;queue_we<=0;path_we<=0;
         if(busy_o) work_cycles<=work_cycles+1'b1;
-        if(busy_o&&work_cycles==24'd2000000) begin
+        if(busy_o&&work_cycles==24'd4000000) begin
           // Bounded fail-closed behavior; video still runs uninterrupted.
           objects_o<=0;valid_o<=0;rejected_o<=16'hffff;cycles_o<=work_cycles;
           result_valid_o<=1;busy_o<=0;state<=IDLE;
@@ -271,7 +271,7 @@ module shape_geometry_engine #(
             if(area2<MIN_AREA*2||far_index==0) begin reject_count<=reject_count+1'b1;state<=SCAN_ADV;end
             else begin
               stack_a[0]<=far_index;stack_b[0]<=trace_end;stack_a[1]<=0;stack_b[1]<=far_index;
-              sp<=2;vertices<=0;
+              sp<=2;vertices<=0;curved_leaves<=0;
               epsilon2<=((box_w<box_h?box_w:box_h)>>4)<2 ? 4 :
                          (((box_w<box_h?box_w:box_h)>>4)*((box_w<box_h?box_w:box_h)>>4));
               state<=SEG_POP;
@@ -307,7 +307,13 @@ module shape_geometry_engine #(
                 stack_a[sp]<=max_index;stack_b[sp]<=sb;stack_a[sp+1]<=sa;stack_b[sp+1]<=max_index;sp<=sp+2;state<=SEG_POP;
               end
             end else if(vertices==16) begin reject_count<=reject_count+1'b1;state<=SCAN_ADV;end
-            else begin vx[vertices]<=ax;vy[vertices]<=ay;vertices<=vertices+1'b1;state<=SEG_POP;end
+            else begin
+              vx[vertices]<=ax;vy[vertices]<=ay;vertices<=vertices+1'b1;
+              // Leaf deviation above one pixel is evidence for an arc rather
+              // than a straight polygon side (ignore tiny chords).
+              if(chord2>16&&cross_square>chord2&&curved_leaves<31) curved_leaves<=curved_leaves+1'b1;
+              state<=SEG_POP;
+            end
           end
           // A closed contour's seed/farthest split can lie in the middle of
           // a straight side. Remove those artificial vertices, including
@@ -362,8 +368,7 @@ module shape_geometry_engine #(
               if(orthogonal) shape_class<=(max_side*4<=min_side*5)?2:3; // SQUARE / RECTANGLE
               else shape_class<=9; // non-rectangular convex QUAD
             end else if(vertices==5&&convex) shape_class<=6; // PENTAGON
-            else if(vertices==6&&convex) shape_class<=7; // HEXAGON
-            else if(vertices>=7&&convex&&circularity_num>=perimeter_square*50&&
+            else if((vertices>=7||(vertices==6&&curved_leaves>=3))&&convex&&circularity_num>=perimeter_square*60&&
                     area2*100>=bbox_area*125&&area2*100<=bbox_area*195) begin
               shape_class<=((box_w*4<=box_h*5)&&(box_h*4<=box_w*5)&&circularity_num>=perimeter_square*85)?4:5;
             end else if(vertices==12&&!convex&&axis_edges>=10&&left_vertices==2&&right_vertices==2&&top_vertices==2&&bottom_vertices==2)
@@ -374,7 +379,7 @@ module shape_geometry_engine #(
             if(shape_class!=0&&object_count<MAX_OBJECTS) begin
               pending_objects[object_count*36 +: 36]<={shape_class,xmin,xmax,ymin,ymax};
               pending_valid[object_count]<=1;object_count<=object_count+1'b1;
-            end else if(shape_class==0) reject_count<=reject_count+1'b1;
+            end else reject_count<=reject_count+1'b1;
             state<=SCAN_ADV;
           end
           PUBLISH: begin

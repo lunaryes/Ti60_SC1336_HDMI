@@ -18,7 +18,7 @@ module tb_character_io;
   repeat(30) @(negedge clk);
  end endtask
  reg [10:0] ox=0;reg [9:0] oy=0;reg en=0,ode=1;wire [23:0] rgb;
- reg [167:0] objects=0;reg [3:0] valid=0;
+ reg [335:0] objects=0;reg [7:0] valid=0;
  character_overlay_cn overlay(ox,oy,ode,en,24'h123456,objects,valid,1'b0,6'd0,rgb,clk,rst);
  initial begin
   repeat(3) @(negedge clk);rst=1;frame();frame();

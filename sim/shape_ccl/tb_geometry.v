@@ -3,7 +3,7 @@ module tb_geometry;
  localparam W=96,H=72,AW=$clog2(W*H);
  reg clk=0,rst_n=0,start=0; always #5 clk=~clk;
  wire busy,done;wire [AW-1:0] addr;reg data;
- reg mask[0:W*H-1];wire [143:0] objects;wire [3:0] valid;
+ reg mask[0:W*H-1];wire [287:0] objects;wire [7:0] valid;
  wire [15:0] rejected;wire [23:0] cycles;
  shape_geometry_engine #(.W(W),.H(H)) dut(clk,rst_n,start,busy,done,addr,data,objects,valid,rejected,cycles);
  always @(posedge clk) data<=mask[addr];
@@ -13,7 +13,7 @@ module tb_geometry;
  begin
   @(negedge clk);rst_n=0;repeat(3) @(negedge clk);rst_n=1;start=1;
   @(negedge clk);start=0;t=0;
-  while(!done && t<2100000) begin @(negedge clk);t=t+1;end
+  while(!done && t<4100000) begin @(negedge clk);t=t+1;end
   $display("CASE %0d valid=%b class=%0d reject=%0d cycles=%0d vertices=%0d area2=%0d perimeter10=%0d",id,valid,objects[35:32],rejected,cycles,dut.vertices,dut.area2,dut.perimeter10);
   if(!done || (want==0 ? valid!=0 : (!valid[0] || objects[35:32]!=want))) $fatal(1,"classification mismatch case %0d",id);
  end endtask

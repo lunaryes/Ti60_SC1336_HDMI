@@ -1330,27 +1330,29 @@ wire [9:0]  overlay_y;
 wire [23:0] pipe_rgb_ocr;
 wire [23:0] pipe_rgb_detect;
 wire [23:0] pipe_rgb_all_detect;
-wire [167:0] character_objects;
-wire [3:0] character_valid;
+wire [503:0] character_objects;
+wire [11:0] character_valid;
 wire character_overflow;
-assign ocr_reject_reason={3'b0,character_overflow};
-character_detection_top u_character_detection (
+wire [3:0] character_diagnostic;
+assign ocr_reject_reason=character_diagnostic;
+character_detection_top #(.MAX_OBJECTS(12)) u_character_detection (
     .clk(clk_pixel),.rst_n(rstn_pixel),.vsync_i(hist_vs),.de_i(hist_de),.gray_i(hist_y),
-    .objects_o(character_objects),.valid_o(character_valid),.busy_o(),.overflow_o(character_overflow),.threshold_o(ocr_threshold)
+    .objects_o(character_objects),.valid_o(character_valid),.busy_o(),.overflow_o(character_overflow),.threshold_o(ocr_threshold),.diagnostic_o(character_diagnostic)
 );
-character_overlay_cn u_character_overlay (
+character_overlay_cn #(.MAX_OBJECTS(12)) u_character_overlay (
     .clk(clk_pixel),.rst_n(rstn_pixel),
     .x_i(overlay_x),.y_i(overlay_y),.de_i(pipe_de),.enable_i(ocr_overlay_enable),
     .rgb_i(pipe_rgb_detect),.objects_i(character_objects),.valid_i(character_valid),
     .legacy_recognized_i(ocr_recognized),.legacy_class_i(ocr_class_id),.rgb_o(pipe_rgb_all_detect)
 );
-wire [143:0] geometry_objects;
-wire [3:0] geometry_valid;
-wire [3:0] fused_geometry_comb;
-reg [3:0] fused_geometry_valid;
+wire [287:0] geometry_objects;
+wire [7:0] geometry_valid;
+wire [7:0] fused_geometry_comb;
+reg [7:0] fused_geometry_valid;
 always @(posedge clk_pixel or negedge rstn_pixel)
     if(!rstn_pixel) fused_geometry_valid<=0;else fused_geometry_valid<=fused_geometry_comb;
-recognition_object_fusion u_object_fusion (
+recognition_object_fusion #(.GC(8),.CC(12)) u_object_fusion (
+    .clk(clk_pixel),.rst_n(rstn_pixel),
     .geometry_objects_i(geometry_objects),.geometry_valid_i(geometry_valid),
     .characters_i(character_objects),.character_valid_i(character_valid),
     .geometry_valid_o(fused_geometry_comb)
