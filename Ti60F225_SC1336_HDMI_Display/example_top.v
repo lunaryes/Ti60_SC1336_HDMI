@@ -1115,6 +1115,7 @@ localparam IMG_THR  = 8'd40;     // Sobel 阈值：edge = mag > thr
 wire                                    pipe_vs                    ;
 wire                                    pipe_de                    ;
 wire                   [  23:0]         pipe_rgb                   ;
+wire                                    pipe_edge                  ;
 
 image_pipeline_top #(.IMG_W(1280),.IMG_H(720)) u_image_pipeline(
     .clk_i                             (clk_pixel                 ),
@@ -1128,17 +1129,44 @@ image_pipeline_top #(.IMG_W(1280),.IMG_H(720)) u_image_pipeline(
 
     .vsync_o                           (pipe_vs                   ),
     .de_o                              (pipe_de                   ),
-    .rgb_o                             (pipe_rgb                  )
+    .rgb_o                             (pipe_rgb                  ),
+    .edge_o                            (pipe_edge                 )
 );
 
-// hsync 要比 de 早 8 个像素才与流水线后的数据同拍（= image_pipeline_top 的 LATENCY），
-// 否则 rgb2dvi 送出的 HS 与 DE 错位，HDMI 画面横移。
-reg [7:0] r_hs_dly = 8'd0;
-always @(posedge clk_pixel or negedge rstn_pixel) begin
-    if (!rstn_pixel) r_hs_dly <= 8'd0;
-    else             r_hs_dly <= {r_hs_dly[6:0], w_rgb_hsync};
-end
-wire                                    pipe_hs  = r_hs_dly[7]     ;
+// =========================================================================================================================================
+// 左右分屏：左半 = 灰度原图，右半 = 灰度原图 + 白色边缘叠加（像素 1:1，不缩放）
+//   · 屏幕像素 (x,y) 直接对应原图像素 (x,y)，x < 640 只取灰度，x >= 640 再叠 Sobel 边缘
+//   · 原图在模块内部延迟 8 拍，与 image_pipeline_top 的 LATENCY = 8 对齐，
+//     否则中缝处左右两半会错开 8 个像素
+//   · 1:1 映射不需要回看历史行，所以该模块零行缓存、零 RAM
+//   · 它同时输出延迟 8 拍的 vs / hs / de，原来给 HS 单独做的 8 级移位（r_hs_dly）
+//     已并入模块内部，不再需要
+// =========================================================================================================================================
+wire                                    sbs_vs                     ;
+wire                                    sbs_hs                     ;
+wire                                    sbs_de                     ;
+wire                   [  23:0]         sbs_rgb                    ;
+
+image_sbs_resizer #(
+    .H_ACTIVE                          (1280                      ),  // 分界列 = 640
+    .LAT                               (8                         ),  // 必须等于 image_pipeline_top 的 LATENCY
+    .EDGE_RGB                          (24'hFF_FF_FF              )   // 边缘叠加颜色：白
+) u_image_sbs_resizer (
+    .clk_i                             (clk_pixel                 ),
+    .rst_ni                            (rstn_pixel                ),
+
+    .vs_i                              (w_rgb_vsync               ),
+    .hs_i                              (w_rgb_hsync               ),
+    .de_i                              (w_rgb_href                ),
+    .rgb_i                             ({w_rgb_r, w_rgb_g, w_rgb_b}),
+
+    .edge_flag_i                       (pipe_edge                 ),
+
+    .vs_o                              (sbs_vs                    ),
+    .hs_o                              (sbs_hs                    ),
+    .de_o                              (sbs_de                    ),
+    .rgb_o                             (sbs_rgb                   )
+);
 
 wire                                    boundcrop_vs               ;
 wire                                    boundcrop_hs               ;
@@ -1148,10 +1176,10 @@ FrameBoundCrop #(.SKIP_ROWS(2),.SKIP_COLS(2),.TOTAL_ROWS(720),.TOTAL_COLS(1280))
     .clk_i                             (clk_pixel                 ),
     .rst_i                             (~rstn_pixel               ),
 
-    .vs_i                              (pipe_vs                   ),
-    .hs_i                              (pipe_hs                   ),
-    .de_i                              (pipe_de                   ),
-    .data_i                            (pipe_rgb                  ),
+    .vs_i                              (sbs_vs                    ),
+    .hs_i                              (sbs_hs                    ),
+    .de_i                              (sbs_de                    ),
+    .data_i                            (sbs_rgb                   ),
 
     .vs_o                              (boundcrop_vs              ),
     .hs_o                              (boundcrop_hs              ),

@@ -37,6 +37,11 @@
 //   帧首上升沿检测，故这里直接透传电平即可。
 //
 // 【thr_i】复位默认值 40 由 example_top 给出；edge_o = (mag_o > thr_i)。
+//
+// 【edge_o】1bit 二值 Sobel 边缘输出，与 rgb_o / de_o / vsync_o 严格同拍。
+//   在模块内部对 sob_edge 打 1 拍（对齐 image_mix 的唯一输出寄存器），供
+//   image_sbs_resizer 做右半屏边缘叠加使用。原有 rgb_o / de_o / vsync_o 的
+//   时序与数据完全不变。
 //=====================================================================
 module image_pipeline_top #(
     parameter IMG_W       = 1280,
@@ -54,7 +59,8 @@ module image_pipeline_top #(
     input  wire [1:0]  mode_i,       // 含义见 image_mix（0 原图 / 1 边缘 / 2、3 分屏）
     output wire        vsync_o,
     output wire        de_o,
-    output wire [23:0] rgb_o
+    output wire [23:0] rgb_o,
+    output wire        edge_o        // 二值边缘，与 rgb_o / de_o 同拍
 );
 
     localparam SOBEL_LAT = 4;
@@ -143,6 +149,18 @@ module image_pipeline_top #(
     //-----------------------------------------------------------------
     wire [23:0] edge_rgb = EDGE_BINARY ? (sob_edge ? 24'hFFFFFF : 24'h000000)
                                        : {sob_mag, sob_mag, sob_mag};
+
+    //-----------------------------------------------------------------
+    // 4b) 新增 edge_o：把 sob_edge 打 1 拍，使其与 image_mix 输出 rgb_o 严格同拍
+    //     image_mix 内部有 1 拍输出寄存器，所以 edge_o 也要延迟 1 拍才对齐；
+    //     de_o 有效时 edge_o 即当前像素的 Sobel 二值结果。
+    //-----------------------------------------------------------------
+    reg edge_d1;
+    always @(posedge clk_i or negedge rst_ni) begin
+        if (!rst_ni) edge_d1 <= 1'b0;
+        else         edge_d1 <= sob_edge;
+    end
+    assign edge_o = edge_d1;
 
     //-----------------------------------------------------------------
     // 5) 原图延迟 ORIG_LAT 拍（纯寄存器，无行缓存，保证 mode 0 逐像素一致）
