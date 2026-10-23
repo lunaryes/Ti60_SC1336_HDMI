@@ -93,3 +93,29 @@ Full compile (map/interface/pnr/pgm) PASS for the spatial correction. All report
 setup/hold clock relationships are positive; clk_pixel setup slack 2.229 ns,
 hold slack 0.026 ns. Existing unmatched CSI SDC warnings remain. JTAG download
 was attempted but no USB target was detected; board visual verification is pending.
+
+## Selective cloud shape rewrite integration
+
+Integrated the shape-recognition changes from origin/codex/shape-ocr-core
+commit 9b3a2f3 on top of local display/alignment commit 71bb59a.
+Only shape_frame_capture.v, shape_geometry_engine.v and shape_geometry_top.v
+were imported. Capture uses an 8x8 edge-count threshold (default 4); geometry
+uses eight-connected components, spans, extent, quadrants and sampled widths.
+Supported classes are triangle, square, rectangle, circle, ellipse, pentagon,
+plus and diamond. Three matching analyses confirm a shape track.
+
+All 25 recognition RTL files remain in the repository. The cloud deletion of
+character RTL was intentionally excluded. The existing shared Chinese-label
+interface and template ROM registration are retained for source compatibility.
+The shape class IDs are unchanged. Display mode 3, yellow edges, four/three-row
+RGB/grayscale compensation, IMG_LAT=27 and DDR/IIR paths remain unchanged.
+
+The cloud regression was extracted to ignored outflow/remote_shape_tests and
+adapted to local Verilator. All 27 geometry cases, capture threshold/frame/busy
+checks and tracker confirmation/gap/class-change/expiry checks passed. Tests,
+fixtures and generated artifacts from the cloud commit were not imported.
+
+Merged-profile Efinity map PASS (239 seconds), RAM10 199/256 (77.73%),
+compared with 212 blocks before the rewrite. This integration has not yet been
+placed/routed, converted to a new bitstream, or programmed. Earlier timing and
+board results above refer to their explicitly named earlier revisions.
