@@ -96,3 +96,8 @@ desktop.ini
 build_video_store/
 build_gray_iir/
 build_iir_motion/
+
+# Reproducible shape programming build
+Ti60F225_SC1336_HDMI_Display/outflow_shape_program/
+Ti60F225_SC1336_HDMI_Display/work_shape_program/
+Ti60F225_SC1336_HDMI_Display/build_shape_program.log

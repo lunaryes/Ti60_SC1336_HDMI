@@ -1,0 +1,3 @@
+*.mem
+*.vvp
+__pycache__/

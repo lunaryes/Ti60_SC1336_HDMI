@@ -10,7 +10,7 @@ module shape_geometry_overlay #(parameter integer MAX_OBJECTS=8) (
  reg border,in_text;reg [7:0] selected_class;
  reg [10:0] selected_x;reg [9:0] selected_y;
  wire ink;wire [6:0] dx=x_i-selected_x;wire [4:0] dy=y_i-selected_y;
- vision_label_cn u_label(1'b0,1'b0,selected_class,dx,dy,ink);
+ vision_label_cn u_label(.id_i(selected_class),.dx_i(dx),.dy_i(dy),.ink_o(ink));
  always @(*) begin
    border=0;in_text=0;selected_class=0;box=0;x0=0;x1=0;y0=0;y1=0;selected_x=0;selected_y=0;tx=0;ty=0;
    for(i=0;i<MAX_OBJECTS;i=i+1) begin

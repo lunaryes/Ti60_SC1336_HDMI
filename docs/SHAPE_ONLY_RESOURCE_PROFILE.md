@@ -1,9 +1,19 @@
+> Historical resource and timing data below predate the rewrite. See [SHAPE_REWRITE.md](SHAPE_REWRITE.md) for the current build and JTAG validation.
+
 # Shape-only resource profile
 
 The active Ti60_Demo.xml project builds shape recognition, Chinese shape labels,
 Canny, DDR frame storage and temporal IIR. Digit and uppercase-letter detection
-are disabled by removing their top-level instances and project source entries.
-All 25 recognition RTL source files remain unchanged in src/recognition.
+are gone: their RTL is deleted from src/recognition and from the project source
+list. Nine shape-only sources remain in src/recognition.
+
+The geometry engine was rewritten to fix the misclassification seen on the
+board. `shape_geometry_engine.v` no longer traces Moore contours or counts RDP
+vertices; it fills each connected component row by row (run 1 .. run 2) and
+classifies with extent, four quadrant occupancies and the row width profile.
+Circle, ellipse, triangle, square, rectangle, pentagon, plus and quad are the
+only classes; everything else is rejected instead of being forced into a class.
+The numbers below were measured before that rewrite and must be regenerated.
 
 The shape overlay receives geometry_valid directly. Character detection,
 character overlay, object fusion and the legacy OCR status overlay are absent.

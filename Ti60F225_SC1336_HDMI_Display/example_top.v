@@ -1382,8 +1382,7 @@ image_pipeline_top #(.IMG_W(1280),.IMG_H(720),.LATENCY(IMG_LAT),
 );
 
 //---------------------------------------------------------------------
-// Shape-only recognition profile. Character RTL is retained in src/recognition
-// for future integration; the active project excludes its detection chain.
+// Shape-only recognition profile. Character recognition RTL has been removed.
 // Coordinates follow the final pipeline stream. Annotations are combinational
 // and do not change video timing or the DDR/IIR path.
 //---------------------------------------------------------------------

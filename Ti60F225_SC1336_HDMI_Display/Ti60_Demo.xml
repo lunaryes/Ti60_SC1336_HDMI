@@ -47,7 +47,6 @@
         <efx:design_file name="src/image/gray_temporal_iir.v" version="default" library="default" />
         <efx:design_file name="src/image/temporal_ddr_history.v" version="default" library="default" />
         <efx:design_file name="src/image/temporal_axi_mux.v" version="default" library="default" />
-        <efx:design_file name="src/recognition/symbol_template_rom.v" version="default" library="default" />
         <efx:design_file name="src/recognition/video_xy_counter.v" version="default" library="default" />
         <efx:design_file name="src/recognition/shape_sdp_ram.v" version="default" library="default" />
         <efx:design_file name="src/recognition/shape_frame_capture.v" version="default" library="default" />
