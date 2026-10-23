@@ -1241,7 +1241,7 @@ localparam IMG_LINK_DEF = 1'b0;  // 方向约束流式边缘连接复位值：1 
                                  //   'L' 命令可运行时切换（view=2 下绿色 = 仅因传播保留的弱边）；
                                  //   关掉即退回"单遍滞后 + 1 像素膨胀"的旧行为，用来上板对比。
                                  //   反馈用 2 块 IMG_W×3bit 行缓存（ping-pong），不增加流水线延迟。
-localparam IMG_LAT      = 26;    // = image_pipeline_top 的 LATENCY，两处必须一致
+localparam IMG_LAT      = 27;    // = image_pipeline_top 的 LATENCY，两处必须一致
                                  //   （2026-10-17 接入 3x3 中值：+1 中值 +2 后级窗口）
 
 wire                                    pipe_vs                    ;

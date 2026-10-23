@@ -74,7 +74,7 @@
 module image_pipeline_top #(
     parameter IMG_W       = 1280,
     parameter IMG_H       = 720,
-    parameter LATENCY     = 19,      // 对外延迟（拍），与上面的推导一致
+    parameter LATENCY     = 20,      // 对外延迟（拍），与上面的推导一致
     // 中值滤波参数：默认只替换"局部极值且与中值差 ≥24"的脉冲点，干净台阶边
     // 会被原样保留；要更强的去噪可把 IMPULSE_ONLY 设 0（全 3x3 中值）。
     parameter integer MEDIAN_IMPULSE_ONLY  = 1,
@@ -398,21 +398,49 @@ module image_pipeline_top #(
     wire [23:0] orig_rgb = orig_dly[ORIG_LAT-1];
 
     //-----------------------------------------------------------------
-    // 7) Common display alignment: optional 4-cycle renderer for all modes.
+    // 7) Spatial alignment for RGB edge overlay (mode 3).
+    // Median + post-median + Gaussian + gradient windows displace edges by
+    // four rows relative to RGB, three relative to median grayscale.
+    // Synchronous line reads add one common clock to every display mode.
+    wire [23:0] overlay_orig;
+    wire [7:0] overlay_gray;
+    display_row_delay #(.WIDTH(24),.IMG_W(IMG_W),.ROWS(4)) u_overlay_orig_rows(
+        .clk(clk_i),.rst_n(rst_ni),.vs_i(can_vs),.de_i(can_de),
+        .data_i(orig_rgb),.data_o(overlay_orig));
+    display_row_delay #(.WIDTH(8),.IMG_W(IMG_W),.ROWS(3)) u_overlay_gray_rows(
+        .clk(clk_i),.rst_n(rst_ni),.vs_i(can_vs),.de_i(can_de),
+        .data_i(gray_rgb_view[7:0]),.data_o(overlay_gray));
+    reg aligned_vs,aligned_de;
+    reg [23:0] orig_clock,edge_clock;
+    reg [7:0] gray_clock;
+    reg [12:0] point_clock;
+    always @(posedge clk_i or negedge rst_ni) begin
+        if(!rst_ni) begin
+            aligned_vs<=0;aligned_de<=0;orig_clock<=0;edge_clock<=0;gray_clock<=0;point_clock<=0;
+        end else begin
+            aligned_vs<=can_vs;aligned_de<=can_de;
+            orig_clock<=orig_rgb;gray_clock<=gray_rgb_view[7:0];
+            edge_clock<=edge_rgb;point_clock<={can_edge,can_aa};
+        end
+    end
+    wire [23:0] aligned_orig=(mode_i==3)?overlay_orig:orig_clock;
+    wire [7:0] aligned_gray=(mode_i==3)?overlay_gray:gray_clock;
+
+    // Common display alignment: optional 4-cycle renderer for all modes.
     //-----------------------------------------------------------------
     wire display_vs,display_de;
     wire [23:0] display_orig,display_gray,display_edge;
     generate if(EDGE_AA) begin: GEN_AA_DISPLAY
         edge_aa_renderer #(.IMG_W(IMG_W),.IMG_H(IMG_H)) u_aa(
-            .clk(clk_i),.rst_n(rst_ni),.vs_i(can_vs),.de_i(can_de),
-            .orig_i(orig_rgb),.gray_i(gray_rgb_view[7:0]),.rgb_i(edge_rgb),
-            .point_i({can_edge,can_aa}),.aa_i(view_i==0),
+            .clk(clk_i),.rst_n(rst_ni),.vs_i(aligned_vs),.de_i(aligned_de),
+            .orig_i(aligned_orig),.gray_i(aligned_gray),.rgb_i(edge_clock),
+            .point_i(point_clock),.aa_i(view_i==0),
             .vs_o(display_vs),.de_o(display_de),.orig_o(display_orig),
             .gray_o(display_gray),.rgb_o(display_edge));
     end else begin: GEN_NO_AA_DISPLAY
-        assign display_vs=can_vs;assign display_de=can_de;
-        assign display_orig=orig_rgb;assign display_gray=gray_rgb_view;
-        assign display_edge=edge_rgb;
+        assign display_vs=aligned_vs;assign display_de=aligned_de;
+        assign display_orig=aligned_orig;assign display_gray={3{aligned_gray}};
+        assign display_edge=edge_clock;
     end endgenerate
     image_mix #(
         .IMG_W (IMG_W),
@@ -578,4 +606,33 @@ module edge_aa_renderer #(parameter integer IMG_W=1280,IMG_H=720)(
             rgb_o<=aa1?{3{maximum}}:rgb1;
         end
     end
+endmodule
+
+// Active-pixel circular line store. Synchronous read-before-write infers BRAM.
+// Reset only addresses/validity; RAM is not reset. Early-frame output is black
+// until enough current-frame rows exist, preventing stale previous-frame data.
+module display_row_delay #(parameter WIDTH=24,IMG_W=1280,ROWS=4)(
+ input wire clk,rst_n,vs_i,de_i,input wire [WIDTH-1:0] data_i,
+ output wire [WIDTH-1:0] data_o
+);
+ localparam DEPTH=IMG_W*ROWS,AW=$clog2(DEPTH);
+ reg [WIDTH-1:0] memory[0:DEPTH-1];
+ reg [AW-1:0] addr;reg [AW:0] filled;
+ reg vs_d,valid;reg [WIDTH-1:0] q;
+ wire frame_start=vs_i&&!vs_d;
+ always @(posedge clk) begin
+  if(de_i) begin q<=memory[addr];memory[addr]<=data_i;end
+ end
+ always @(posedge clk or negedge rst_n) begin
+  if(!rst_n) begin addr<=0;filled<=0;vs_d<=0;valid<=0;end
+  else begin
+   vs_d<=vs_i;valid<=de_i&&(filled>=DEPTH)&&!frame_start;
+   if(frame_start) begin addr<=0;filled<=0;end
+   else if(de_i) begin
+    addr<=addr==DEPTH-1?0:addr+1'b1;
+    if(filled<DEPTH) filled<=filled+1'b1;
+   end
+  end
+ end
+ assign data_o=valid?q:{WIDTH{1'b0}};
 endmodule

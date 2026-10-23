@@ -66,3 +66,30 @@ The shape annotations remain controlled by UART E.
 Select using `python sim/video_control.py --port COM6 --layout overlay` or send
 binary bytes `4D 03`. This is also the FPGA reset default. These display changes
 require rebuilding the bitstream and downloading it before they affect the board.
+
+## Overlay spatial alignment correction
+
+A full-pipeline horizontal step regression exposed a four-row RGB/edge offset:
+the uncorrected original became white on output row 21 while yellow edges
+appeared on rows 24/25. Median grayscale became white on row 22.
+Mode 3 now delays original RGB by four active rows and median grayscale by
+three active rows before the common AA renderer. The corrected grayscale
+transition is row 25 and the edge straddles rows 24/25. Vertical step edges
+remain on columns 43/44. Measurements use a 64x48 input step at row20/column44.
+
+Synchronous read-before-write line stores infer BRAM. Frame-start validity
+suppresses previous-frame RAM contents; unavailable top rows are black.
+The renderer adds its existing common one-row displacement to every stream.
+Modes 0/1/2 retain their spatial behavior. All display modes gain one common
+clock for synchronous line reads, so top-level IMG_LAT changes from 26 to 27.
+The recognizer taps and DDR/IIR control paths are unchanged.
+
+Regression: sim/tb_overlay_alignment.sv, run with and without +VERTICAL.
+Synthesis PASS: RAM10 212/256 (82.81%), LUT4 22017, FF 12345;
+DSP48 71 and DSP24 24. The added 28 RAM10 blocks are the physical mapping
+of 4x1280x24 RGB and 3x1280x8 gray active-pixel line stores.
+
+Full compile (map/interface/pnr/pgm) PASS for the spatial correction. All reported
+setup/hold clock relationships are positive; clk_pixel setup slack 2.229 ns,
+hold slack 0.026 ns. Existing unmatched CSI SDC warnings remain. JTAG download
+was attempted but no USB target was detected; board visual verification is pending.
