@@ -69,15 +69,15 @@ module shape_geometry_engine #(
     reg [5:0] state;
 
     reg visited_we,queue_we;
-    reg [15:0] visited_wd,component_id;
+    reg [7:0] visited_wd;reg [15:0] component_id;
     reg [3:0] degree;
     reg [15:0] endpoint_count;
     reg [AW-1:0] visited_wa,visited_ra;
     reg [QAWL-1:0] queue_wa,queue_ra;
     reg [15:0] queue_wd;
-    wire [15:0] visited_rd;
+    wire [7:0] visited_rd;
     wire [15:0] queue_rd;
-    shape_sdp_ram #(.WIDTH(16),.DEPTH(N),.AW(AW)) u_visited(
+    shape_sdp_ram #(.WIDTH(8),.DEPTH(N),.AW(AW)) u_visited(
         .clk(clk),.we(visited_we),.wa(visited_wa),.wd(visited_wd),.ra(visited_ra),.rd(visited_rd));
     shape_sdp_ram #(.WIDTH(16),.DEPTH(QDEPTH),.AW(QAWL)) u_queue(
         .clk(clk),.we(queue_we),.wa(queue_wa),.wd(queue_wd),.ra(queue_ra),.rd(queue_rd));
@@ -137,7 +137,7 @@ module shape_geometry_engine #(
     // ---- span fill decision -----------------------------------------------
     // A per-pixel component tag keeps earlier components out of this fill; an
     // isolated speckle inside the bbox cannot open or close the slice.
-    wire ink_c=raw_data_i&&(visited_rd==component_id);
+    wire ink_c=raw_data_i&&(visited_rd==component_id[7:0]);
     wire run_start=(state==F_EVAL)&&!prev_ink&&ink_c;
     wire run_end=(state==F_EVAL)&&prev_ink&&!ink_c;
     wire [2:0] ridx=run_idx+((run_start&&run_idx!=7)?3'd1:3'd0);

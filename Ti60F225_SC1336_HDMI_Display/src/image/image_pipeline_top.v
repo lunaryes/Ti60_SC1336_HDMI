@@ -404,10 +404,10 @@ module image_pipeline_top #(
     // Synchronous line reads add one common clock to every display mode.
     wire [23:0] overlay_orig;
     wire [7:0] overlay_gray;
-    display_row_delay #(.WIDTH(24),.IMG_W(IMG_W),.ROWS(4)) u_overlay_orig_rows(
+    display_row_delay #(.WIDTH(24),.IMG_W(IMG_W),.ROWS(5)) u_overlay_orig_rows(
         .clk(clk_i),.rst_n(rst_ni),.vs_i(can_vs),.de_i(can_de),
         .data_i(orig_rgb),.data_o(overlay_orig));
-    display_row_delay #(.WIDTH(8),.IMG_W(IMG_W),.ROWS(3)) u_overlay_gray_rows(
+    display_row_delay #(.WIDTH(8),.IMG_W(IMG_W),.ROWS(4)) u_overlay_gray_rows(
         .clk(clk_i),.rst_n(rst_ni),.vs_i(can_vs),.de_i(can_de),
         .data_i(gray_rgb_view[7:0]),.data_o(overlay_gray));
     reg aligned_vs,aligned_de;
@@ -558,11 +558,16 @@ module edge_aa_renderer #(parameter integer IMG_W=1280,IMG_H=720)(
     output reg vs_o,de_o,
     output reg [23:0] orig_o,gray_o,rgb_o
 );
-    wire [69:0] w11,w12,w13,w21,w22,w23,w31,w32,w33;
+    // Only the 14-bit {aa,point} field needs a 3x3 neighbourhood. The 56-bit image
+    // payload used to ride through the same window, which made every line bank 70
+    // bits wide. w22 is exactly one line period plus two clocks behind din, so an
+    // extra row in display_row_delay plus these two registers reproduces it at a
+    // fraction of the RAM cost.
+    wire [13:0] w11,w12,w13,w21,w22,w23,w31,w32,w33;
     wire wvs,wde;
-    canny_win3x3 #(.W(70),.IMG_W(IMG_W)) u_window(
+    canny_win3x3 #(.W(14),.IMG_W(IMG_W)) u_window(
         .clk(clk),.rst_n(rst_n),.vsync_i(vs_i),.de_i(de_i),
-        .din({orig_i,gray_i,rgb_i,aa_i,point_i}),.vsync_o(wvs),.de_o(wde),
+        .din({aa_i,point_i}),.vsync_o(wvs),.de_o(wde),
         .w11(w11),.w12(w12),.w13(w13),.w21(w21),.w22(w22),.w23(w23),
         .w31(w31),.w32(w32),.w33(w33));
     wire [7:0] c11,c12,c13,c21,c22,c23,c31,c32,c33;
@@ -576,6 +581,8 @@ module edge_aa_renderer #(parameter integer IMG_W=1280,IMG_H=720)(
     edge_aa_coverage #(.DX(0),.DY(-1)) a32(w32[12:0],c32);
     edge_aa_coverage #(.DX(-1),.DY(-1)) a33(w33[12:0],c33);
     reg [7:0] q11,q12,q13,q21,q22,q23,q31,q32,q33;
+    reg [23:0] orig_d1,orig_d2,rgb_d1,rgb_d2;
+    reg [7:0]  gray_d1,gray_d2;
     reg v1,d1,aa1;
     reg [23:0] orig1,rgb1;
     reg [7:0] gray1;
@@ -591,6 +598,7 @@ module edge_aa_renderer #(parameter integer IMG_W=1280,IMG_H=720)(
             wvs_d<=0;row<=0;col<=0;
             q11<=0;q12<=0;q13<=0;q21<=0;q22<=0;q23<=0;q31<=0;q32<=0;q33<=0;
             v1<=0;d1<=0;aa1<=0;orig1<=0;gray1<=0;rgb1<=0;
+            orig_d1<=0;orig_d2<=0;rgb_d1<=0;rgb_d2<=0;gray_d1<=0;gray_d2<=0;
             vs_o<=0;de_o<=0;orig_o<=0;gray_o<=0;rgb_o<=0;
         end else begin
             wvs_d<=wvs;
@@ -601,7 +609,10 @@ module edge_aa_renderer #(parameter integer IMG_W=1280,IMG_H=720)(
             q11<=c11;q12<=c12;q13<=c13;q21<=c21;q22<=c22;q23<=c23;q31<=c31;q32<=c32;q33<=c33;
             v1<=wvs;d1<=wde;
             aa1<=w22[13] && row>=2 && row<IMG_H-1 && col>=2 && col<IMG_W-2;
-            orig1<=w22[69:46];gray1<=w22[45:38];rgb1<=w22[37:14];
+            orig_d1<=orig_i;orig_d2<=orig_d1;
+            rgb_d1<=rgb_i;rgb_d2<=rgb_d1;
+            gray_d1<=gray_i;gray_d2<=gray_d1;
+            orig1<=orig_d2;gray1<=gray_d2;rgb1<=rgb_d2;
             vs_o<=v1;de_o<=d1;orig_o<=orig1;gray_o<={3{gray1}};
             rgb_o<=aa1?{3{maximum}}:rgb1;
         end
