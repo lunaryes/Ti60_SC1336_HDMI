@@ -1,5 +1,5 @@
 `timescale 1ns / 1ps
-// Application update (2026-10-22): P/N/J/K/O/F control DDR frames, Q returns
+// Application update: P/J/K/O/F control DDR frames; N is a legacy no-op, Q returns
 // application configuration, D requests atomic frame status. See
 // docs/DDR_VIDEO_STORE.md. H is disabled by default; historical notes below
 // describe standalone diagnostic use, not the current application top level.
@@ -40,13 +40,11 @@
 //   'B' <byte>   AWB **B 通道增益** = byte/64。复位值 96 = ×1.5 = 原来的 384/256
 //   'S' <byte>   smooth = byte[1:0]（>2 按 2 截断）：0 标准高斯 / 1 弱平滑 /
 //                2 完全旁路。写入即生效（smooth_valid_o 单拍脉冲），优先于 K1
-//   'L' <byte>   link_en = byte[0]（2026-10-19）：1 = Canny 方向约束流式反馈开，
-//                0 = 退回原来的单遍滞后。用于**不重新综合**地对比开/关
-//                （view=2 下绿色像素就是开的时候新增的传播保留像素）
 //   'R'          回读：回发 8 字节
-//                {thr, view, mode, gain_r, gain_b, smooth, link, '\n'}
+//                {thr, view, mode, gain_r, gain_b, smooth, 0, '\n'}
 //                第 1 字节是实际生效阈值（来自按键控制器），第 6 字节是实际
-//                生效平滑模式，第 7 字节是 link_en（高电平有效）
+//                生效平滑模式，第 7 字节是保留位（恒 0；原为 link_en，
+//                2026-10-25 link 移除后清 0，帧长不变以兼容既有采集脚本）
 //   'H'          **片内直方图回传请求**（M6，无采集卡时量灰度分布）：只出
 //                hist_req_o 单拍脉冲，本模块不参与回包。真正发流的是
 //                src/common/gray_hist_uart.v，拓扑在 example_top 里做：
@@ -62,10 +60,9 @@
 //   例：把阈值调到 24 并切到假彩图 —— 发 'T' 0x18 'V' 0x02
 //       回读当前状态 —— 发 'R'，应收到 18 02 03 70 60 01 01 0A
 //                       （70/60 = 112/96 = 复位默认，smooth 复位 = 1，
-//                        link 复位 = 1）
+//                        第 7 字节是保留位 = 0）
 //       R 增益调到 ×2.5 —— 发 'A' 0xA0（160/64 = 2.5），再用 'R' 确认第 4 个字节是 A0
 //       切到标准高斯 —— 发 'S' 0x00
-//       对比边缘连接开/关 —— 发 'L' 0x01 / 'L' 0x00，再用 'R' 看第 7 个字节
 //
 //---------------------------------------------------------------------
 // 一处刻意的省略（写在注释里，免得后人以为是漏了）：
@@ -89,8 +86,7 @@ module uart_cmd #(
                                              // 2026-10-15 对白墙二分，×1.59 偏青、×2.0 偏暖、
                                              // ×1.75 中性。改前写死的是 409/256 ≈ ×1.59）
     parameter [7:0]   GAIN_B_DEF = 8'd96,    // 96/64 = ×1.5（= 原 384/256）
-    parameter [1:0]   SMOOTH_DEF = 2'd1,     // 0 标准高斯 / 1 弱平滑 / 2 完全旁路
-    parameter         LINK_DEF   = 1'b1      // 1 = 方向约束流式反馈默认开
+    parameter [1:0]   SMOOTH_DEF = 2'd1      // 0 标准高斯 / 1 弱平滑 / 2 完全旁路
 )(
     input  wire       clk,
     input  wire       rst_n,
@@ -107,7 +103,6 @@ module uart_cmd #(
     output reg  [1:0] mode_o,
     output reg  [1:0] smooth_o,
     output reg        smooth_valid_o, // 'S' 写入的单拍脉冲，与 smooth_o 同拍有效
-    output reg        link_o,         // 'L' 写入：方向约束流式反馈开关
     // AWB 增益（1/64 定点）。默认 = 复位值 = 原 example_top 里写死的常数，
     // 所以"不插串口"和"插了不用"两种情况下画面与改动前逐像素一致。
     output reg  [7:0] gain_r_o,
@@ -117,15 +112,11 @@ module uart_cmd #(
 
     // M6 增量端口（只增不改）：直方图请求与 TX 忙标志
     output reg [2:0] play_mode_o,
-    output reg tnr_enable_o,
     output reg [3:0] age_a_o,age_b_o,
     output reg [7:0] replay_div_o,
     output reg status_req_o,
     input wire status_valid_i,
     input wire [31:0] app_status_i,
-    output reg history_req_o,input wire history_valid_i,
-    input wire [31:0] history_status_i,strong_pixels_i,weak_pixels_i,bypass_pixels_i,
-    output reg [63:0] iir_tuning_o,
     output reg        hist_req_o,   // 收到 'H' 的单拍脉冲
     output wire       tx_busy_o     // TX 状态机忙（含已排队的 tx_req）
 );
@@ -212,14 +203,12 @@ module uart_cmd #(
     //-----------------------------------------------------------------
     localparam [7:0] C_T = 8'h54, C_V = 8'h56, C_M = 8'h4D, C_R = 8'h52,
                      C_A = 8'h41, C_B = 8'h42, C_H = 8'h48, C_S = 8'h53,
-                     C_L = 8'h4C, C_Q=8'h51, C_P=8'h50, C_N=8'h4e, C_J=8'h4a, C_K=8'h4b, C_O=8'h4f, C_F=8'h46, C_D=8'h44, C_E=8'h45;
+                     C_Q=8'h51, C_P=8'h50, C_N=8'h4e, C_J=8'h4a, C_K=8'h4b, C_O=8'h4f, C_F=8'h46, C_D=8'h44, C_E=8'h45;
 
     reg       p_wait;                 // 正在等参数字节
-    reg [31:0] snapshot_strong,snapshot_weak,snapshot_bypass;
-    reg [7:0] iir_index;
     reg [7:0] p_cmd;
     reg       tx_req;
-    reg [7:0] tx_d [0:7];             // 8 字节 {thr,view,mode,gain_r,gain_b,smooth,link,'\n'}
+    reg [7:0] tx_d [0:7];             // 8 字节 {thr,view,mode,gain_r,gain_b,smooth,0,'\n'}
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -229,7 +218,6 @@ module uart_cmd #(
             mode_o   <= MODE_DEF;
             smooth_o <= SMOOTH_DEF;
             smooth_valid_o <= 1'b0;
-            link_o   <= LINK_DEF;
             gain_r_o <= GAIN_R_DEF;
             gain_b_o <= GAIN_B_DEF;
             ocr_enable_o <= 1'b1;
@@ -237,19 +225,11 @@ module uart_cmd #(
             p_cmd      <= 8'd0;
             tx_req     <= 1'b0;
             hist_req_o <= 1'b0;
-            play_mode_o<=0;tnr_enable_o<=1;age_a_o<=0;age_b_o<=1;replay_div_o<=2;status_req_o<=0;history_req_o<=0;
-            snapshot_strong<=0;snapshot_weak<=0;snapshot_bypass<=0;
-            iir_tuning_o<=64'h0818080405020201;iir_index<=0;
+            play_mode_o<=0;age_a_o<=0;age_b_o<=1;replay_div_o<=2;status_req_o<=0;
         end else begin
             tx_req      <= 1'b0;
             hist_req_o  <= 1'b0;
             status_req_o<=0;
-            history_req_o<=0;
-            if(history_valid_i)begin
-                tx_d[0]<=8'h49;tx_d[1]<=8'h49;tx_d[2]<=1;
-                tx_d[3]<=history_status_i[7:0];tx_d[4]<=history_status_i[15:8];
-                tx_d[5]<=history_status_i[23:16];tx_d[6]<=history_status_i[31:24];tx_d[7]<=8'h0a;tx_req<=1;
-            end
             if(status_valid_i) begin
                 tx_d[0]<=8'h44;tx_d[1]<=8'h56;tx_d[2]<=1;
                 tx_d[3]<=app_status_i[7:0];tx_d[4]<=app_status_i[15:8];
@@ -260,7 +240,7 @@ module uart_cmd #(
             if (rx_valid) begin
                 if (!p_wait) begin
                     case (rx_byte)
-                        C_T, C_V, C_M, C_A, C_B, C_S, C_L, C_P, C_N, C_J, C_K, C_O, C_F, C_E,8'h59,8'h5a: begin
+                        C_T, C_V, C_M, C_A, C_B, C_S, C_P, C_N, C_J, C_K, C_O, C_F, C_E,8'h59,8'h5a: begin
                             p_cmd  <= rx_byte;
                             p_wait <= 1'b1;
                         end
@@ -269,23 +249,8 @@ module uart_cmd #(
                             if(ENABLE_DIAGNOSTICS) hist_req_o <= 1'b1;
                         end
                         C_D: status_req_o<=1;
-                        8'h5d:iir_tuning_o<=64'h0818080405020201;
-                        8'h5b:begin
-                         tx_d[0]<=8'h5b;tx_d[1]<=8'h49;tx_d[2]<=2;tx_d[3]<=iir_index;
-                         tx_d[4]<=(iir_index<8)?iir_tuning_o[iir_index[2:0]*8+:8]:8'hff;
-                         tx_d[5]<=0;tx_d[6]<=(iir_index<8)?0:1;tx_d[7]<=8'h0a;tx_req<=1;
-                        end
-                        8'h49:begin history_req_o<=1;snapshot_strong<=strong_pixels_i;snapshot_weak<=weak_pixels_i;snapshot_bypass<=bypass_pixels_i;end
-                        8'h55,8'h57,8'h58:begin
-                            tx_d[0]<=rx_byte;tx_d[1]<=8'h49;tx_d[2]<=1;tx_d[7]<=8'h0a;tx_req<=1;
-                            case(rx_byte)
-                             8'h55:begin tx_d[3]<=snapshot_strong[7:0];tx_d[4]<=snapshot_strong[15:8];tx_d[5]<=snapshot_strong[23:16];tx_d[6]<=snapshot_strong[31:24];end
-                             8'h57:begin tx_d[3]<=snapshot_weak[7:0];tx_d[4]<=snapshot_weak[15:8];tx_d[5]<=snapshot_weak[23:16];tx_d[6]<=snapshot_weak[31:24];end
-                             8'h58:begin tx_d[3]<=snapshot_bypass[7:0];tx_d[4]<=snapshot_bypass[15:8];tx_d[5]<=snapshot_bypass[23:16];tx_d[6]<=snapshot_bypass[31:24];end
-                            endcase
-                        end
                         C_Q: begin
-                            tx_d[0]<=8'h56;tx_d[1]<={5'd0,play_mode_o};tx_d[2]<={7'd0,tnr_enable_o};
+                            tx_d[0]<=8'h56;tx_d[1]<={5'd0,play_mode_o};tx_d[2]<=0; // Reserved: temporal IIR removed
                             tx_d[3]<={4'd0,age_a_o};tx_d[4]<={4'd0,age_b_o};
                             tx_d[5]<=replay_div_o;tx_d[6]<=0;tx_d[7]<=8'h0a;tx_req<=1;
                         end
@@ -296,7 +261,7 @@ module uart_cmd #(
                             tx_d[3] <= gain_r_o;         // 回读里带上增益：
                             tx_d[4] <= gain_b_o;         // 调完不用再猜"到底生效没有"
                             tx_d[5] <= {6'b0, smooth_read_i};
-                            tx_d[6] <= {7'b0, link_o};   // 方向约束反馈开关
+                            tx_d[6] <= 8'd0;             // 保留位（原 link，现恒 0）
                             tx_d[7] <= 8'h0A;            // '\n'
                             tx_req  <= 1'b1;
                         end
@@ -304,13 +269,8 @@ module uart_cmd #(
                     endcase
                 end else begin
                     case (p_cmd)
-                        8'h59:iir_index<=rx_byte;
-                        8'h5a:if(iir_index<8)begin
-                         if(iir_index<2)iir_tuning_o[iir_index[2:0]*8+:8]<=(rx_byte>3)?3:rx_byte;
-                         else iir_tuning_o[iir_index[2:0]*8+:8]<=rx_byte;
-                        end
                         C_P: play_mode_o<=(rx_byte>4)?0:rx_byte[2:0];
-                        C_N: tnr_enable_o<=rx_byte[0];
+                        C_N: ; // Legacy N parameter consumed, no effect
                         C_J: age_a_o<=rx_byte[3:0];
                         C_K: age_b_o<=rx_byte[3:0];
                         C_O: replay_div_o<=(rx_byte==0)?1:rx_byte;
@@ -328,7 +288,6 @@ module uart_cmd #(
                         end
                         C_A:     gain_r_o <= rx_byte;
                         C_B:     gain_b_o <= rx_byte;
-                        C_L:     link_o   <= rx_byte[0];
                         C_E:     ocr_enable_o <= rx_byte[0];
                         default: ;
                     endcase

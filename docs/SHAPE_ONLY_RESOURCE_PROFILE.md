@@ -1,3 +1,5 @@
+> Current profile update: temporal IIR has been removed. Median feeds Canny directly; application IMG_LAT=24. Historical IIR/resource records below refer to earlier revisions.
+
 # Shape-only resource profile
 
 The active Ti60_Demo.xml project builds shape recognition, Chinese shape labels,
@@ -59,7 +61,7 @@ Display mode M=3 is now left-half grayscale and right-half original RGB with
 bright yellow (FFFF00) edges. It uses corresponding halves of the full frame;
 it does not scale two complete images side by side. Mode 3 forces the edge tap
 regardless of V so grayscale display selection cannot mask the entire original.
-Any nonzero antialiased edge coverage selects yellow. No new RAM or output
+Antialiased edge coverage blends yellow with original RGB (alpha/255). No new RAM or output
 pipeline stage is added. Modes 0/1/2 retain original/edge/gray-edge split behavior.
 The shape annotations remain controlled by UART E.
 
@@ -119,3 +121,37 @@ Merged-profile Efinity map PASS (239 seconds), RAM10 199/256 (77.73%),
 compared with 212 blocks before the rewrite. This integration has not yet been
 placed/routed, converted to a new bitstream, or programmed. Earlier timing and
 board results above refer to their explicitly named earlier revisions.
+
+## Temporal IIR removal (2026-10-26)
+
+Removed temporal_ddr_history, gray_temporal_iir and temporal_axi_mux from the
+active project. RAW frame storage connects directly to the calibrated DDR
+interface. The three-clock external temporal path is removed from the image
+pipeline; HDMI HS alignment changes from 27 to 24 clocks. Four/three-row overlay
+alignment is unchanged. Spatial median and Canny smoothing remain.
+
+RAW frame freezing, history age selection, replay, comparison and difference
+are retained. UART Q keeps its eight-byte format with byte2 reserved zero.
+Legacy N/Y/Z parameter frames are consumed without effect; IIR status/counter
+and tuning queries no longer respond. The control tool no longer sends them.
+Old IIR RTL and standalone tests are retained only as historical sources.
+
+Validation: Efinity 2026.1 map PASS (127 seconds), RAM10 181/256 (70.70%),
+LUT4 21582, FF 13637, DSP48 32, DSP24 30. Before removal RAM10 was 197.
+UART regression: 66 cases PASS. Horizontal and vertical full-pipeline overlay
+checks PASS, including exact 24-clock VS/DE latency. No placement/routing,
+bitstream generation or board programming has been performed for this change.
+
+## Coverage-weighted yellow overlay
+
+Mode3 now computes round((original*(255-alpha)+yellow*alpha)/255), using
+8-bit AA coverage alpha and yellow=FFFF00. Zero coverage preserves original RGB
+exactly; full coverage produces exact yellow. Integer constant-division reduction
+uses rounded products rather than a general divider. Three 8x8 products are
+combinational; no new RAM, output stage or UART command is added.
+
+Validation: tb_yellow_coverage exhaustively checks 65536 pixel/alpha combinations
+against independent integer /255 arithmetic, plus left grayscale and timing.
+Horizontal/vertical full-pipeline overlay and 24-clock VS/DE regressions PASS.
+This change has not been synthesized, placed/routed or programmed yet; earlier
+resource reports are for the previous hard-yellow overlay revision.

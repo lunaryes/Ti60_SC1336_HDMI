@@ -1009,8 +1009,7 @@ module example_top
 	wire 	[7:0] 	w_axi_tp; 
 	
     wire [2:0] app_play_mode;
-    wire [63:0] iir_tuning;
-    wire app_tnr,app_status_req,app_status_valid;
+    wire app_status_req,app_status_valid;
     wire [3:0] app_age_a,app_age_b;
     wire [7:0] app_replay_div;
     wire [31:0] app_status_sys,app_status_pixel;
@@ -1022,108 +1021,42 @@ module example_top
     // Otherwise the address bridge can acknowledge a command that never reached
     // the gated DDR input, leaving a master waiting forever for its response.
     wire ddr_app_reset=w_ddr3_ui_rst || !r_ddr_unlock;
-    (* async_reg="true" *) reg [1:0] ddr_ready_pixel;
-    always @(posedge clk_pixel or negedge rstn_pixel)begin
-      if(!rstn_pixel)ddr_ready_pixel<=0;
-      else ddr_ready_pixel<={ddr_ready_pixel[0],r_ddr_unlock};
-    end
-    wire temporal_pixel_reset=~rstn_pixel || !ddr_ready_pixel[1];
-    wire [31:0] raw_awaddr,raw_araddr,hist_awaddr,hist_araddr,raw_status,hist_status;
-    wire [7:0] raw_awlen,raw_arlen,hist_awlen,hist_arlen;
-    wire [127:0] raw_wdata,hist_wdata;
-    wire raw_awvalid,raw_awready,raw_wlast,raw_wvalid,raw_wready,raw_bvalid;
-    wire raw_arvalid,raw_arready,raw_rvalid;
-    wire hist_awvalid,hist_awready,hist_wlast,hist_wvalid,hist_wready,hist_bvalid;
-    wire hist_arvalid,hist_arready,hist_rvalid;
-    wire [15:0] raw_source_id;
-    wire [31:0] history_pixel_status,strong_pixels,weak_pixels,bypass_pixels;
-    wire history_req,history_valid;
-    frame_status_mailbox history_mailbox(
-      .src_clk(w_ddr3_ui_clk),.src_rst(w_ddr3_ui_rst),.src_status(hist_status),
-      .dst_clk(clk_pixel),.dst_rst(~rstn_pixel),.request_i(history_req),
-      .valid_o(history_valid),.status_o(history_pixel_status));
-    (* async_reg="true" *) reg [15:0] source_meta,source_pixel;
-    always @(posedge clk_pixel) begin source_meta<=raw_source_id;source_pixel<=source_meta;end
-    wire [7:0] median_y,temporal_y;
-    wire median_vs,median_de,temporal_vs,temporal_de;
-    assign app_status_sys={raw_status[31:24]|hist_status[31:24],raw_status[23:0]};
+    wire [31:0] raw_status;
+    assign app_status_sys=raw_status;
     assign w_ddr3_wstrb=16'hffff;
     assign w_ddr3_arid=0;
     assign w_ddr3_rready=1'b1;
-    temporal_ddr_history u_temporal_history(
-      .sc(w_ddr3_ui_clk),.pc(clk_pixel),.rst(ddr_app_reset),.prst(temporal_pixel_reset),
-      .frame_vs(median_vs),.pixel_de(median_de),.pixel_y(median_y),
-      .source_id(source_pixel),.enable_i(app_tnr),.mode_i(app_play_mode),
-      .config_i({r_awb_gain,b_awb_gain,iir_tuning}),
-      .filtered_vs(temporal_vs),.filtered_de(temporal_de),.filtered_y(temporal_y),.status_o(hist_status),
-      .strong_pixels_o(strong_pixels),.weak_pixels_o(weak_pixels),.bypass_pixels_o(bypass_pixels),
-      .awaddr(hist_awaddr),.awlen(hist_awlen),.awvalid(hist_awvalid),.awready(hist_awready),
-      .wdata(hist_wdata),.wlast(hist_wlast),.wvalid(hist_wvalid),.wready(hist_wready),
-      .bvalid(hist_bvalid),.bresp(w_ddr3_bresp),
-      .araddr(hist_araddr),.arlen(hist_arlen),.arvalid(hist_arvalid),.arready(hist_arready),
-      .rdata(w_ddr3_rdata),.rlast(w_ddr3_rlast),.rvalid(hist_rvalid),.rresp(w_ddr3_rresp));
-    temporal_axi_mux u_temporal_mux(
-      .clk(w_ddr3_ui_clk),.rst(ddr_app_reset),
-      .a_awaddr(raw_awaddr),.b_awaddr(hist_awaddr),
-      .a_awlen(raw_awlen),.b_awlen(hist_awlen),
-      .a_awvalid(raw_awvalid),.b_awvalid(hist_awvalid),
-      .a_awready(raw_awready),.b_awready(hist_awready),
-      .a_wdata(raw_wdata),.b_wdata(hist_wdata),
-      .a_wlast(raw_wlast),.b_wlast(hist_wlast),
-      .a_wvalid(raw_wvalid),.b_wvalid(hist_wvalid),
-      .a_wready(raw_wready),.b_wready(hist_wready),
-      .a_bvalid(raw_bvalid),.b_bvalid(hist_bvalid),
-      .a_araddr(raw_araddr),.b_araddr(hist_araddr),
-      .a_arlen(raw_arlen),.b_arlen(hist_arlen),
-      .a_arvalid(raw_arvalid),.b_arvalid(hist_arvalid),
-      .a_arready(raw_arready),.b_arready(hist_arready),
-      .a_rvalid(raw_rvalid),.b_rvalid(hist_rvalid),
-      .awaddr(w_ddr3_awaddr),
-      .araddr(w_ddr3_araddr),
-      .awlen(w_ddr3_awlen),
-      .arlen(w_ddr3_arlen),
-      .awvalid(w_ddr3_awvalid),
-      .arvalid(w_ddr3_arvalid),
-      .awready(w_ddr3_awready),
-      .arready(w_ddr3_arready),
-      .wdata(w_ddr3_wdata),
-      .wlast(w_ddr3_wlast),
-      .wvalid(w_ddr3_wvalid),
-      .wready(w_ddr3_wready),
-      .bvalid(w_ddr3_bvalid),
-      .rlast(w_ddr3_rlast),
-      .rvalid(w_ddr3_rvalid));
 	ddr_video_store #(.C_RD_END_ADDR(1280 * 720), .C_W_WIDTH(CSI_DATA_WIDTH), .C_R_WIDTH(8), .C_ID_LEN(4)) u_axi4_ctrl (
 
 		.axi_clk        (w_ddr3_ui_clk            ),
 		.axi_reset      (ddr_app_reset            ),
 
-		.axi_awaddr     (raw_awaddr       ),
-		.axi_awlen      (raw_awlen        ),
-		.axi_awvalid    (raw_awvalid      ),
-		.axi_awready    (raw_awready      ),
+		.axi_awaddr     (w_ddr3_awaddr       ),
+		.axi_awlen      (w_ddr3_awlen        ),
+		.axi_awvalid    (w_ddr3_awvalid      ),
+		.axi_awready    (w_ddr3_awready      ),
 
-		.axi_wdata      (raw_wdata        ),
+		.axi_wdata      (w_ddr3_wdata        ),
 		.axi_wstrb      (),
-		.axi_wlast      (raw_wlast        ),
-		.axi_wvalid     (raw_wvalid       ),
-		.axi_wready     (raw_wready       ),
+		.axi_wlast      (w_ddr3_wlast        ),
+		.axi_wvalid     (w_ddr3_wvalid       ),
+		.axi_wready     (w_ddr3_wready       ),
 
 		.axi_bid        (0          ),
 		.axi_bresp      (w_ddr3_bresp),
-		.axi_bvalid     (raw_bvalid),
+		.axi_bvalid     (w_ddr3_bvalid),
 
 		.axi_arid       (),
-		.axi_araddr     (raw_araddr       ),
-		.axi_arlen      (raw_arlen        ),
-		.axi_arvalid    (raw_arvalid      ),
-		.axi_arready    (raw_arready      ),
+		.axi_araddr     (w_ddr3_araddr       ),
+		.axi_arlen      (w_ddr3_arlen        ),
+		.axi_arvalid    (w_ddr3_arvalid      ),
+		.axi_arready    (w_ddr3_arready      ),
 
 		.axi_rid        (w_ddr3_rid          ),
 		.axi_rdata      (w_ddr3_rdata        ),
 		.axi_rresp      (w_ddr3_rresp),
 		.axi_rlast      (w_ddr3_rlast        ),
-		.axi_rvalid     (raw_rvalid       ),
+		.axi_rvalid     (w_ddr3_rvalid       ),
 		.axi_rready     (),
 
 		.wframe_pclk    (cmos_pclk          ),
@@ -1138,7 +1071,7 @@ module example_top
 		
 		.play_mode_i(app_play_mode),.tnr_enable_i(1'b0),
         .age_a_i(app_age_a),.age_b_i(app_age_b),.replay_div_i(app_replay_div),
-        .status_o(raw_status),.display_source_o(raw_source_id),
+        .status_o(raw_status),.display_source_o(),
         .tp_o 		(w_axi_tp)
 	);
 	//assign led_o[3:0] = w_axi_tp; 	// See application LED assignments above
@@ -1235,13 +1168,7 @@ localparam IMG_THR_DEF  = 8'd12; // Canny 强边阈值（内部 mag8 = mag>>3 �
                                  //      平滑模式），上板后不插串口、不重综合就能改；
                                  //      见下面的 canny_threshold_key_ctrl 例化。
                                  //    ★ 若以后把采集端修好（AWB/曝光/换打印纸卡），可以再抬回 16。
-localparam IMG_LINK_DEF = 1'b0;  // 方向约束流式边缘连接复位值：1 开 / 0 关
-                                 //   ★ 2026-10-19 方案A硬件A/B：先置 0（功能关，逻辑仍在），
-                                 //     与 HEAD 逐像素行为一致；用来判定黑屏是否由 link 功能引起。
-                                 //   'L' 命令可运行时切换（view=2 下绿色 = 仅因传播保留的弱边）；
-                                 //   关掉即退回"单遍滞后 + 1 像素膨胀"的旧行为，用来上板对比。
-                                 //   反馈用 2 块 IMG_W×3bit 行缓存（ping-pong），不增加流水线延迟。
-localparam IMG_LAT      = 27;    // = image_pipeline_top 的 LATENCY，两处必须一致
+localparam IMG_LAT      = 24;    // = image_pipeline_top 的 LATENCY，两处必须一致
                                  //   （2026-10-17 接入 3x3 中值：+1 中值 +2 后级窗口）
 
 wire                                    pipe_vs                    ;
@@ -1256,7 +1183,6 @@ wire                   [   1:0]         r_smooth_mode              ;   // uart_c
 wire                                    r_smooth_valid             ;   // 同拍单脉冲
 wire                                    ocr_overlay_enable         ;   // UART 'E': annotation A/B
 wire                   [   1:0]         w_smooth_mode              ;   // 实际生效（按键也会改）
-wire                                    r_img_link                 ;   // uart_cmd 'L' 寄存器
 
 //---------------------------------------------------------------------
 // Application UART: controls and atomic frame-store status only.
@@ -1269,8 +1195,8 @@ wire uart_cmd_rx=uart_rx_i;
 // 引脚（GPIOT_N_16 / GPIOT_P_16），此前全工程从未引用。跑在 clk_pixel 域，
 // 与流水线同域，不需要 CDC。
 // 命令格式（2 字节帧：命令 + 参数）：'T'<thr> 'S'<smooth> 'V'<view> 'M'<mode>，
-// 'A'<AWB R 增益>，'B'<AWB B 增益>，'L'<link_en>，'R' 回读 8 字节
-// {thr, view, mode, gain_r, gain_b, smooth, link, '\n'}。详见 src/common/uart_cmd.v。
+// 'A'<AWB R 增益>，'B'<AWB B 增益>，'R' 回读 8 字节
+// {thr, view, mode, gain_r, gain_b, smooth, 0(保留位), '\n'}。详见 src/common/uart_cmd.v。
 //
 // ★ 2026-10-17：**阈值/平滑串口控制**（与按键并存，串口优先）。
 //   thr_o/thr_valid_o、smooth_o/smooth_valid_o 接到下面
@@ -1284,8 +1210,7 @@ uart_cmd #(
     .BAUD     (460800),
     .THR_DEF  (IMG_THR_DEF),     // 'T' 写入前的回读值；与按键控制器默认值相同
     .VIEW_DEF (IMG_VIEW_DEF),
-    .MODE_DEF (IMG_MODE_DEF),
-    .LINK_DEF (IMG_LINK_DEF)     // 'L' 复位值：方向约束流式反馈默认开
+    .MODE_DEF (IMG_MODE_DEF)
 ) u_uart_cmd (
     .clk    (clk_pixel                 ),
     .rst_n  (rstn_pixel                ),
@@ -1300,17 +1225,14 @@ uart_cmd #(
     .mode_o (r_img_mode                ),
     .smooth_o (r_smooth_mode           ),   // 'S' 写入 → 按键控制器
     .smooth_valid_o (r_smooth_valid    ),   // 同拍单脉冲
-    .link_o   (r_img_link              ),   // 'L' 写入 → image_pipeline_top.link_en_i
 
     .gain_r_o (r_awb_gain              ),   // AWB R 增益（1/64 定点，复位 112 = ×1.75）
     .gain_b_o (b_awb_gain              ),   // AWB B 增益（复位 96 = ×1.50）
     .ocr_enable_o(ocr_overlay_enable   ),
 
-    .play_mode_o(app_play_mode),.tnr_enable_o(app_tnr),
+    .play_mode_o(app_play_mode),
     .age_a_o(app_age_a),.age_b_o(app_age_b),.replay_div_o(app_replay_div),
     .status_req_o(app_status_req),.status_valid_i(app_status_valid),.app_status_i(app_status_pixel),
-    .iir_tuning_o(iir_tuning),.history_req_o(history_req),.history_valid_i(history_valid),.history_status_i(history_pixel_status),
-    .strong_pixels_i(strong_pixels),.weak_pixels_i(weak_pixels),.bypass_pixels_i(bypass_pixels),
     .hist_req_o (),   // Historical diagnostic request, unused
     .tx_busy_o  (cmd_tx_busy           )    // Application command reply busy
 );
@@ -1348,8 +1270,7 @@ canny_threshold_key_ctrl #(
 
 wire shape_edge,shape_de,shape_vs;
 image_pipeline_top #(.IMG_W(1280),.IMG_H(720),.LATENCY(IMG_LAT),
-                     .TEMPORAL_EXT(1),.DBG_LINK_COLOR(0),
-                     .LINK_TURN90(0),.LINK_GAP1(1),.WEAK_STRUCT(1),.EDGE_AA(1)) u_image_pipeline(   // Application edge/gray views; weak structure retained
+                     .WEAK_STRUCT(1),.EDGE_AA(1)) u_image_pipeline(   // Application edge/gray views; weak structure retained
     .clk_i                             (clk_pixel                 ),
     .rst_ni                            (rstn_pixel                ),
 
@@ -1360,22 +1281,16 @@ image_pipeline_top #(.IMG_W(1280),.IMG_H(720),.LATENCY(IMG_LAT),
     .mode_i                            (r_img_mode                ),
     .view_i                            ((r_img_mode==3) ? 2'd0 : (r_img_view==3 ? 2'd3 : 2'd0)),
     .smooth_mode_i                     (w_smooth_mode             ),
-    .link_en_i                         (r_img_link                ),   // 'L' 运行时开关
 
     .vsync_o                           (pipe_vs                   ),
     .de_o                              (pipe_de                   ),
     .rgb_o                             (pipe_rgb                  ),
 
     // M6 调试抽头：中值后、Canny 实际看到的 Y/de/vs（不增加逻辑）
-    .dbg_y_o                           (median_y),
-    .dbg_de_o                          (median_de),
-    .dbg_vs_o                          (median_vs),
+    .dbg_y_o                           (),
+    .dbg_de_o                          (),
+    .dbg_vs_o                          (),
 
-    .dbg_cond_o                        (),
-    .dbg_link_en_o                     (),
-    .dbg_cond_seen_o                   (),
-    .dbg_link_seen_o                   (),
-    .temporal_y_i(temporal_y),.temporal_de_i(temporal_de),.temporal_vs_i(temporal_vs),
     .dbg_edge_o                        (shape_edge),
     .dbg_edge_de_o                     (shape_de),
     .dbg_edge_vs_o                     (shape_vs)

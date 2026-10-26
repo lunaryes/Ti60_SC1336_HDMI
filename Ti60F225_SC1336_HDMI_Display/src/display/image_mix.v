@@ -73,9 +73,23 @@ module image_mix #(
     //------------------------------------------------------------------
     wire        in_right  = (col_cnt >= HALF_W);                // 右半列
     wire [23:0] split_rgb = in_right ? edge_rgb_i : gray_rgb_i;
-    // The pipeline supplies the edge view in mode 3, including AA coverage.
-    // Any covered edge pixel is bright yellow; other pixels retain original RGB.
-    wire [23:0] overlay_rgb = (|edge_rgb_i) ? 24'hFFFF00 : orig_rgb_i;
+    // Mode 3 receives grayscale AA coverage: 0=original, 255=yellow.
+    // Rounded division by 255 without a divider; endpoints are exact.
+    function [7:0] scale_coverage;
+        input [7:0] value,coverage;
+        reg [15:0] product;
+        reg [16:0] rounded;
+        begin
+            product=value*coverage;
+            rounded={1'b0,product}+17'd128;
+            scale_coverage=(rounded+(rounded>>8))>>8;
+        end
+    endfunction
+    wire [7:0] alpha=edge_rgb_i[7:0];
+    wire [7:0] tint_r=orig_rgb_i[23:16]+scale_coverage(8'd255-orig_rgb_i[23:16],alpha);
+    wire [7:0] tint_g=orig_rgb_i[15:8]+scale_coverage(8'd255-orig_rgb_i[15:8],alpha);
+    wire [7:0] tint_b=orig_rgb_i[7:0]-scale_coverage(orig_rgb_i[7:0],alpha);
+    wire [23:0] overlay_rgb={tint_r,tint_g,tint_b};
     wire [23:0] split_overlay_rgb = in_right ? overlay_rgb : gray_rgb_i;
 
     //------------------------------------------------------------------
