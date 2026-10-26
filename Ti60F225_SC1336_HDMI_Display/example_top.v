@@ -248,8 +248,8 @@ module example_top
 	//	★ 2026-10-16：GPIOL_P_02 / GPIOL_N_02 原分给 lcd_de_o / lcd_pclk_o，但这两个
 	//	  LCD 端口在本设计里从未被驱动（lcd_pclk_o 的端口声明本身就是注释掉的），
 	//	  而显示走 HDMI，所以把这两个脚改分给按键（Ti60_Demo.peri.xml 同步改）。
-	input 		 	key1_i,				//	K1 = CSI = GPIOL_P_02 -> Canny 平滑模式循环
-	input 		 	key2_i,				//	K2 = CSO = GPIOL_N_02 -> Canny 阈值循环（步长 1）
+	input 		 	key1_i,				//	K1 = CSI = GPIOL_P_02 -> Canny 阈值 +4
+	input 		 	key2_i,				//	K2 = CSO = GPIOL_N_02 -> Canny 阈值 -4
 
 
 	////////////////////////////////////////////////////////////////
@@ -1240,9 +1240,8 @@ uart_cmd #(
 //---------------------------------------------------------------------
 // Canny 阈值/平滑控制（K1 / K2 + 串口 'T'/'S'）—— 两个参数的唯一来源
 //   模块自带 2FF 同步 + 20 ms 消抖 + 按下沿事件，全在 clk_pixel 域，与流水线同域。
-//   K2 循环阈值：4,5,...,48,4,...（步长 1，IMG_THR_DEF 是复位值）；
-//   K1 循环平滑模式：0 标准高斯 -> 1 弱平滑 -> 2 旁路 -> 0（复位值 1）。
-//   串口 'T'/'S' 通过 uart_*_valid_i 直接写入，优先于按键；'T' 量程 0..255。
+//   K1 加4、K2 减4；阈值范围4..32，到边界饱和，双键不调节。
+//   默认标准高斯，平滑仅通过串口 S 控制。UART T/S 优先于按键。
 //   按住不放不会连续步进；不按则参数保持不变。
 //---------------------------------------------------------------------
 canny_threshold_key_ctrl #(
@@ -1250,13 +1249,13 @@ canny_threshold_key_ctrl #(
     .DEBOUNCE_MS (20),
     .THR_DEFAULT (IMG_THR_DEF),
     .THR_MIN     (8'd4),
-    .THR_MAX     (8'd48),
-    .THR_STEP    (8'd1)
+    .THR_MAX     (8'd32),
+    .THR_STEP    (8'd4)
 ) u_canny_thr_key (
     .clk   (clk_pixel                  ),
     .rst_n (rstn_pixel                 ),
 
-    .key_data          ({key2_i, key1_i}),   // [0] = K1 平滑 / [1] = K2 阈值
+    .key_data          ({key2_i, key1_i}),   // [0] = K1 加阈值 / [1] = K2 减阈值
     .uart_thr_valid_i  (w_uart_thr_valid),   // 'T' 单拍脉冲（串口优先）
     .uart_thr_i        (w_uart_thr     ),    // 'T' 写入值，量程 0..255
     .uart_smooth_valid_i (r_smooth_valid),   // 'S' 单拍脉冲（串口优先）

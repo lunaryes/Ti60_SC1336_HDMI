@@ -86,7 +86,7 @@ module uart_cmd #(
                                              // 2026-10-15 对白墙二分，×1.59 偏青、×2.0 偏暖、
                                              // ×1.75 中性。改前写死的是 409/256 ≈ ×1.59）
     parameter [7:0]   GAIN_B_DEF = 8'd96,    // 96/64 = ×1.5（= 原 384/256）
-    parameter [1:0]   SMOOTH_DEF = 2'd1      // 0 标准高斯 / 1 弱平滑 / 2 完全旁路
+    parameter [1:0]   SMOOTH_DEF = 2'd0      // 0 标准高斯 / 1 弱平滑 / 2 完全旁路
 )(
     input  wire       clk,
     input  wire       rst_n,
@@ -276,7 +276,7 @@ module uart_cmd #(
                         C_O: replay_div_o<=(rx_byte==0)?1:rx_byte;
                         C_F: play_mode_o<=rx_byte[0]?1:0;
                         C_T: begin
-                            thr_o       <= rx_byte;
+                            thr_o       <= (rx_byte < 8'd4) ? 8'd4 : (rx_byte > 8'd32) ? 8'd32 : rx_byte;
                             thr_valid_o <= 1'b1;
                         end
                         C_V:     view_o   <= rx_byte[1:0];
