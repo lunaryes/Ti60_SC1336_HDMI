@@ -157,6 +157,12 @@
         <efxpt:comp_gpio name="clk_p" gpio_def="GPIOR_P_09" mode="output" bus_name="" io_standard="1.5 V SSTL">
             <efxpt:output_config name="clk_p_hi" name_ddio_lo="clk_p_lo" register_option="register" clock_name="tdqss_clk" is_clock_inverted="false" is_slew_rate="false" tied_option="none" ddio_type="resync" delay="0" is_serial="false" drive_strength="8" fastclk_name=""/>
         </efxpt:comp_gpio>
+        <efxpt:comp_gpio name="can_rx_i" gpio_def="GPIOT_P_11" mode="input" bus_name="" io_standard="1.8 V LVCMOS">
+            <efxpt:input_config name="can_rx_i" name_ddio_lo="" conn_type="normal" is_register="false" clock_name="" is_clock_inverted="false" pull_option="weak pullup" is_schmitt_trigger="false" ddio_type="none" is_bus_hold="false" delay="0" is_serial="false" is_dyn_delay="false" fastclk_name="" pullup_ena_name="can_rx_i_PULL_UP_ENA" dyn_delay_en_name="can_rx_i_DLY_ENA" dyn_delay_reset_name="can_rx_i_DLY_RST" dyn_delay_ctrl_name="can_rx_i_DLY_CTRL" clkmux_buf_name=""/>
+        </efxpt:comp_gpio>
+        <efxpt:comp_gpio name="can_tx_o" gpio_def="GPIOT_N_11" mode="output" bus_name="" io_standard="1.8 V LVCMOS">
+            <efxpt:output_config name="can_tx_o" name_ddio_lo="" register_option="none" clock_name="" is_clock_inverted="false" is_slew_rate="false" tied_option="none" ddio_type="none" delay="0" is_serial="false" drive_strength="4" fastclk_name=""/>
+        </efxpt:comp_gpio>
         <efxpt:comp_gpio name="cmos_data[0]" gpio_def="GPIOL_01" mode="input" bus_name="cmos_data" io_standard="3.3 V LVCMOS">
             <efxpt:input_config name="cmos_data[0]" name_ddio_lo="" conn_type="normal" is_register="true" clock_name="cmos_pclk" is_clock_inverted="true" pull_option="none" is_schmitt_trigger="false" ddio_type="none" is_bus_hold="false" delay="0" is_serial="false" is_dyn_delay="false" fastclk_name="" pullup_ena_name="cmos_data_PULL_UP_ENA[0]" dyn_delay_en_name="cmos_data_DLY_ENA[0]" dyn_delay_reset_name="cmos_data_DLY_RST[0]" dyn_delay_ctrl_name="cmos_data_DLY_CTRL[0]" clkmux_buf_name=""/>
         </efxpt:comp_gpio>

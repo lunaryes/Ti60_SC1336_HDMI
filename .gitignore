@@ -96,3 +96,11 @@ desktop.ini
 build_video_store/
 build_gray_iir/
 build_iir_motion/
+
+# PWM tracking build/program products
+/Ti60F225_SC1336_HDMI_Display/outflow_triangle/
+/Ti60F225_SC1336_HDMI_Display/work_triangle/
+/Ti60F225_SC1336_HDMI_Display/build_triangle*.log
+/Ti60F225_SC1336_HDMI_Display/program_triangle*.log
+/artifacts/triangle900/
+sim/triangle_tracking/*.vvp

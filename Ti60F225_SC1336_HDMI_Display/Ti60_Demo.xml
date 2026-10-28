@@ -57,6 +57,10 @@
         <efx:design_file name="src/recognition/recognition_object_tracker.v" version="default" library="default" />
         <efx:design_file name="src/recognition/vision_cn_font.v" version="default" library="default" />
         <efx:design_file name="src/recognition/vision_label_cn.v" version="default" library="default" />
+        <efx:design_file name="src/pwm_tracker/triangle_target_select.v" version="default" library="default" />
+        <efx:design_file name="src/pwm_tracker/axis_cdc.v" version="default" library="default" />
+        <efx:design_file name="src/pwm_tracker/triangle_follow_ctrl.v" version="default" library="default" />
+        <efx:design_file name="src/pwm_tracker/triangle_tracking_top.v" version="default" library="default" />
         <efx:top_vhdl_arch name="" />
         <efx:msg_config name="" />
         <efx:partition_definitions name="" />

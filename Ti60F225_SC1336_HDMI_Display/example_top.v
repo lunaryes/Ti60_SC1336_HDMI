@@ -249,7 +249,9 @@ module example_top
 	//	  LCD 端口在本设计里从未被驱动（lcd_pclk_o 的端口声明本身就是注释掉的），
 	//	  而显示走 HDMI，所以把这两个脚改分给按键（Ti60_Demo.peri.xml 同步改）。
 	input 		 	key1_i,				//	K1 = CSI = GPIOL_P_02 -> Canny 阈值 +4
-	input 		 	key2_i,				//	K2 = CSO = GPIOL_N_02 -> Canny 阈值 -4
+	output wire can_tx_o,
+    input wire can_rx_i,
+    input 		 	key2_i,				//	K2 = CSO = GPIOL_N_02 -> hold to pause tracking
 
 
 	////////////////////////////////////////////////////////////////
@@ -801,9 +803,9 @@ module example_top
 	end
 	//-----------------------------------------------------------------
 	// Application DDR state, PLL lock and camera frame activity.
-    assign led_o[3:0]=~w_axi_tp[3:0];
-    assign led_o[4]=~w_pll_lock;
-    assign led_o[5]=r_cmos_fv_o[3];
+    assign led_o[3:0]=~track_debug[3:0];
+    assign led_o[4]=~track_debug[4];
+    assign led_o[5]=~track_debug[5];
 
 	
 	
@@ -1255,7 +1257,7 @@ canny_threshold_key_ctrl #(
     .clk   (clk_pixel                  ),
     .rst_n (rstn_pixel                 ),
 
-    .key_data          ({key2_i, key1_i}),   // [0] = K1 加阈值 / [1] = K2 减阈值
+    .key_data          ({1'b1, key1_i}),   // K1 threshold +4; K2 reserved for motor pause
     .uart_thr_valid_i  (w_uart_thr_valid),   // 'T' 单拍脉冲（串口优先）
     .uart_thr_i        (w_uart_thr     ),    // 'T' 写入值，量程 0..255
     .uart_smooth_valid_i (r_smooth_valid),   // 'S' 单拍脉冲（串口优先）
@@ -1303,7 +1305,7 @@ image_pipeline_top #(.IMG_W(1280),.IMG_H(720),.LATENCY(IMG_LAT),
 //---------------------------------------------------------------------
 wire [10:0] overlay_x;
 wire [9:0] overlay_y;
-wire [23:0] pipe_rgb_detect;
+wire [23:0] pipe_rgb_detect,geometry_rgb;
 wire [287:0] geometry_objects;
 wire [7:0] geometry_valid;
 shape_geometry_top u_geometry (
@@ -1312,8 +1314,12 @@ shape_geometry_top u_geometry (
 );
 shape_geometry_overlay u_geometry_overlay (
     .x_i(overlay_x),.y_i(overlay_y),.de_i(pipe_de),.enable_i(ocr_overlay_enable),
-    .rgb_i(pipe_rgb),.objects_i(geometry_objects),.valid_i(geometry_valid),.rgb_o(pipe_rgb_detect)
+    .rgb_i(pipe_rgb),.objects_i(geometry_objects),.valid_i(geometry_valid),.rgb_o(geometry_rgb)
 );
+assign pipe_rgb_detect=pipe_de &&
+ ((overlay_x==628||overlay_x==652)||
+ ((overlay_x>=630&&overlay_x<=649)&&(overlay_y==359||overlay_y==360)))
+ ?24'hffff00:geometry_rgb;
 video_xy_counter #(.IMG_W(1280)) u_overlay_xy (
     .clk(clk_pixel),.rst_n(rstn_pixel),.vsync_i(pipe_vs),.de_i(pipe_de),
     .x_o(overlay_x),.y_o(overlay_y)
@@ -1397,6 +1403,18 @@ FrameBoundCrop #(.SKIP_ROWS(3),.SKIP_COLS(2),.TOTAL_ROWS(720),.TOTAL_COLS(1280))
 
 	
 	
+// Single-axis PWM visual servo; P4-39 output. K2 held = pause.
+ parameter MOTOR_SPEED_MODE=0;
+ parameter MOTOR_DIR_INVERT=1;
+ wire [3:0] track_status;
+ wire [5:0] track_debug;
+ wire signed [9:0] track_error;
+ wire [20:0] track_pulse;
+ triangle_tracking_top #(.SPEED_MODE(MOTOR_SPEED_MODE),
+ .DIR_INVERT(MOTOR_DIR_INVERT)) u_triangle_follow(
+ .clk_pixel(clk_pixel),.rst_pixel_n(rstn_pixel),.vsync_i(shape_vs),
+ .objects_i(geometry_objects),.valid_i(geometry_valid),
+ .clk_sys(clk_sys),.rst_sys_n(rstn_sys),.enable_i(key2_i),
+ .pwm_o(can_tx_o),.status_o(track_status),
+ .error_o(track_error),.pulse_o(track_pulse),.debug_o(track_debug));
 endmodule
-
-
