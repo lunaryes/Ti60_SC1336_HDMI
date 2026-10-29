@@ -1411,12 +1411,23 @@ FrameBoundCrop #(.SKIP_ROWS(3),.SKIP_COLS(2),.TOTAL_ROWS(720),.TOTAL_COLS(1280))
 
 	
 	
-// Single-axis PWM visual servo; P4-39 output. K2 held = pause.
+// Single-axis PWM visual servo; P4-39 output. K2 toggles pause; non-live frames force pause.
  parameter MOTOR_SPEED_MODE=0;
  parameter MOTOR_DIR_INVERT=1;
+ // Transfer one coherent configuration snapshot into the motor domain.
+ wire [18:0] tracking_cfg;
+ wire tracking_cfg_valid;
+ axis_cdc #(.W(19)) u_tracking_cfg_cdc (
+ .clk_s(clk_pixel),.rst_s_n(rstn_pixel),
+ .data_s({app_play_mode,app_age_a,app_age_b,w_img_thr}),.valid_s(1'b1),
+ .clk_d(clk_sys),.rst_d_n(rstn_sys),.data_d(tracking_cfg),.valid_d(tracking_cfg_valid));
+ wire tracking_auto_pause,tracking_rearming;
+ tracking_config_guard u_tracking_config_guard (
+ .clk(clk_sys),.rst_n(rstn_sys),.config_i(tracking_cfg),.valid_i(tracking_cfg_valid),
+ .auto_pause_o(tracking_auto_pause),.rearming_o(tracking_rearming));
  wire tracking_enabled;
  tracking_pause_key u_tracking_pause_key (
- .clk(clk_sys),.rst_n(rstn_sys),.key_n(key2_i),.enabled_o(tracking_enabled));
+ .clk(clk_sys),.rst_n(rstn_sys),.key_n(key2_i),.auto_pause_i(tracking_auto_pause),.enabled_o(tracking_enabled));
  wire [3:0] track_status;
  wire [5:0] track_debug;
  wire signed [9:0] track_error;
@@ -1425,7 +1436,7 @@ FrameBoundCrop #(.SKIP_ROWS(3),.SKIP_COLS(2),.TOTAL_ROWS(720),.TOTAL_COLS(1280))
  .DIR_INVERT(MOTOR_DIR_INVERT)) u_triangle_follow(
  .clk_pixel(clk_pixel),.rst_pixel_n(rstn_pixel),.vsync_i(shape_vs),
  .objects_i(geometry_objects),.valid_i(geometry_valid),
- .clk_sys(clk_sys),.rst_sys_n(rstn_sys),.enable_i(tracking_enabled),
+ .clk_sys(clk_sys),.rst_sys_n(rstn_sys),.enable_i(tracking_enabled && !tracking_rearming),
  .pwm_o(can_tx_o),.status_o(track_status),
  .error_o(track_error),.pulse_o(track_pulse),.debug_o(track_debug));
 endmodule

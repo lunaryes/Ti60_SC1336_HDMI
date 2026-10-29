@@ -62,6 +62,7 @@
         <efx:design_file name="src/pwm_tracker/triangle_follow_ctrl.v" version="default" library="default" />
         <efx:design_file name="src/pwm_tracker/triangle_tracking_top.v" version="default" library="default" />
         <efx:design_file name="src/control/tracking_pause_key.v" version="default" library="default" />
+        <efx:design_file name="src/control/tracking_config_guard.v" version="default" library="default" />
         <efx:design_file name="src/display/tracking_status_overlay.v" version="default" library="default" />
         <efx:top_vhdl_arch name="" />
         <efx:msg_config name="" />

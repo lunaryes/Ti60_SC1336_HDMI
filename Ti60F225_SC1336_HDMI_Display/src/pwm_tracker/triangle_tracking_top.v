@@ -11,7 +11,7 @@ module triangle_tracking_top #(
  wire signed [9:0] ex,ey;
  wire found,frame;
  triangle_target_select select_target(
- .clk(clk_pixel),.rst_n(rst_pixel_n),.vsync_i(vsync_i),
+ .clk(clk_pixel),.rst_n(rst_pixel_n),.vsync_i(vsync_i),.clear_i(!en_pix[1] || epoch_pix[1]!=epoch_seen),
  .objects_i(objects_i),.valid_i(valid_i),.ex_o(ex),.ey_o(ey),
  .found_o(found),.frame_o(frame),.size_w_o(),.size_h_o());
  // The system domain owns a generation bit. A resume invalidates every

@@ -6,10 +6,13 @@ module triangle_target_select #(
     parameter [3:0]   TRI_CLASS   = 4'd1,      // shape_geometry_engine.v:226 -> 1 = 三角形
     parameter integer MIN_SIZE    = 2,         // 最小边（格），滤掉噪点
     parameter integer MAX_SIZE    = 128,        // 最大边（格），滤掉整屏误判
+    parameter integer LOST_FRAMES = 3,
+    parameter integer MATCH_RADIUS = 40, // doubled grid units: 160 pixels
     parameter integer H_WEIGHT    = 4            // 水平误差权重（垂直不做动作，只降权）
 )(
     input  wire        clk,          // clk_pixel 74.25 MHz
     input  wire        rst_n,
+    input  wire        clear_i,      // invalidate association on pause/rearm
     input  wire        vsync_i,      // 与 objects_i 同域
 
     input  wire [MAX_OBJECTS*36-1:0] objects_i,
@@ -58,7 +61,18 @@ wire [9:0] cy2 = {2'b0, ymin} + {2'b0, ymax} + 10'd1;
 wire [9:0] dx = (cx2 >= CX2_REF) ? (cx2 - CX2_REF) : (CX2_REF - cx2);
 wire [9:0] dy = (cy2 >= CY2_REF) ? (cy2 - CY2_REF) : (CY2_REF - cy2);
 
-wire [13:0] cost_w = ({dx, 2'b00}) + {4'd0, dy};
+reg locked;
+reg [9:0] last_cx,last_cy;
+reg [8:0] last_w,last_h;
+reg [7:0] misses;
+wire [9:0] mx=cx2>=last_cx?cx2-last_cx:last_cx-cx2;
+wire [9:0] my=cy2>=last_cy?cy2-last_cy:last_cy-cy2;
+wire [8:0] mw=bw>=last_w?bw-last_w:last_w-bw;
+wire [8:0] mh=bh>=last_h?bh-last_h:last_h-bh;
+wire match_ok=mx<=MATCH_RADIUS && my<=MATCH_RADIUS &&
+ ({1'b0,bw}<<1)>={1'b0,last_w} && {1'b0,bw}<=({1'b0,last_w}<<1) &&
+ ({1'b0,bh}<<1)>={1'b0,last_h} && {1'b0,bh}<=({1'b0,last_h}<<1);
+wire [13:0] cost_w=locked? ((mx<<2)+my+mw+mh):((dx<<2)+dy);
 
 wire cand = valid_i[idx]
          && (cls == TRI_CLASS)
@@ -82,6 +96,7 @@ wire signed [11:0] ey_c = $signed({2'b0, best_cy}) - $signed({2'b0, CY2_REF});
 
 always @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
+        locked<=0;last_cx<=0;last_cy<=0;last_w<=0;last_h<=0;misses<=0;
         st        <= IDLE;
         vs_d      <= 1'b0;
         idx       <= {IW{1'b0}};
@@ -114,7 +129,7 @@ always @(posedge clk or negedge rst_n) begin
         end
 
         SCAN: begin
-            if (cand && (cost_w < best_cost)) begin
+            if (cand && (!locked || match_ok) && (cost_w < best_cost)) begin
                 best_cost <= cost_w;
                 best_v    <= 1'b1;
                 best_cx   <= cx2;
@@ -127,6 +142,13 @@ always @(posedge clk or negedge rst_n) begin
         end
 
         DONE: begin
+            if(best_v) begin
+                locked<=1;misses<=0;last_cx<=best_cx;last_cy<=best_cy;
+                last_w<=best_w;last_h<=best_h;
+            end else if(locked) begin
+                if(misses>=LOST_FRAMES-1) begin locked<=0;misses<=0;end
+                else misses<=misses+1'b1;
+            end
             found_o  <= best_v;
             ex_o     <= ex_c[9:0];
             ey_o     <= ey_c[9:0];
@@ -138,6 +160,7 @@ always @(posedge clk or negedge rst_n) begin
 
         default: st <= IDLE;
         endcase
+        if(clear_i) begin locked<=0;misses<=0;st<=IDLE;found_o<=0;frame_o<=0;end
     end
 end
 
