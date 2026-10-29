@@ -102,6 +102,11 @@ module image_pipeline_top #(
     input  wire [1:0]  view_i,       // 边缘支路显示什么，见下方【view_i】
     input  wire [1:0]  smooth_mode_i,// 0 标准高斯 / 1 弱平滑 / 2 完全旁路
     input  wire        link_en_i,    // 1 = 切向流式反馈开；0 = 退回单遍滞后
+    // 自适应阈值（Otsu，见 otsu_thr_gen.v）：auto_en_i=1 时强边阈值由
+    // 每帧直方图自动算出，thr_i 退化为微调偏移（手动值−默认值，有符号）；
+    // =0 时行为与旧版完全一致（thr_i 为绝对阈值），可随时回退。
+    input  wire        auto_en_i,
+    input  wire signed [8:0] thr_off_i,
     output wire        vsync_o,
     output wire        de_o,
     output wire [23:0] rgb_o,
@@ -272,9 +277,40 @@ module image_pipeline_top #(
     assign dbg_edge_de_o=can_de;
     assign dbg_edge_vs_o=can_vs;
 
+    //-----------------------------------------------------------------
+    // 自适应阈值（Otsu）：统计 canny 输出域的 mag8 直方图（NMS 未过记 0，
+    // 与论文口径一致），消隐期算出阈值、下帧生效。详见 otsu_thr_gen.v。
+    // 手动路径保留：auto_en_i=0 时 thr_high/thr_low 与旧版逐位一致。
+    //-----------------------------------------------------------------
+    wire [7:0]  otsu_high;    // 自适应强边阈值（已钳位+滞回）
+    wire [7:0]  otsu_raw;     // 钳位前原始 bin（观察用，暂不外引）
+
+    otsu_thr_gen #(
+        .IMG_W        (IMG_W),
+        .THR_MIN      (8'd4),    // 与 canny_threshold_key_ctrl 的 THR_MIN 一致
+        .THR_MAX      (8'd48),   // canny_edge.v 标定：>48≈关掉边缘检测
+        .THR_DFLT     (8'd12),
+        .THR_DEADBAND (2)
+    ) u_otsu_thr (
+        .clk        (clk_i),
+        .rst_n      (rst_ni),
+        .vsync_i    (can_vs),
+        .de_i       (can_de),
+        .mag8_i     (can_mag8),
+        .cls_i      (can_cls),
+        .thr_high_o (otsu_high),
+        .thr_raw_o  (otsu_raw)
+    );
+
+    // auto 模式：Otsu 值 + 手动偏移，再钳到 [2,64]（手动偏移的护栏）
+    wire signed [8:0] thr_auto_comb = $signed({1'b0, otsu_high}) + thr_off_i;
+    wire [7:0] thr_auto = ($signed(thr_auto_comb) < 9'sd2)  ? 8'd2  :
+                          ($signed(thr_auto_comb) > 9'sd64) ? 8'd64 :
+                          thr_auto_comb[7:0];
+
     // 单一阈值口 → 双阈值（2:1），见文件头的【thr_i】
-    wire [7:0]  thr_high = thr_i;
-    wire [7:0]  thr_low  = {1'b0, thr_i[7:1]};
+    wire [7:0]  thr_high = auto_en_i ? thr_auto : thr_i;
+    wire [7:0]  thr_low  = {1'b0, thr_high[7:1]};
 
     canny_edge #(
         .IMG_W       (IMG_W),

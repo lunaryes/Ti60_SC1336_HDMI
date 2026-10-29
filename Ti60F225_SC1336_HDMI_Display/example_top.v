@@ -260,6 +260,13 @@ module example_top
 	
 	output 	[5:0] 	led_o,			//	
 	
+	////////////////////////////////////////////////////////////////
+	//	GM6020 CAN（必须外接 3.3 V CAN 收发器，如 SN65HVD230）
+	//	  can_tx_o -> 球 A9 = GPIOT_N_11 = User_IO34 = 底板 P4 第 39 脚
+	//	  can_rx_i <- 球 B9 = GPIOT_P_11 = User_IO35 = 底板 P4 第 40 脚
+	//	  bank 2B 为 1.8 V LVCMOS，经底板 TXS0108E 转 3.3 V 出排针
+	output 			can_tx_o,
+	input  			can_rx_i,
 	
 	////////////////////////////////////////////////////////////////
 	//	CMOS Sensor
@@ -800,8 +807,23 @@ module example_top
 		r_cmos_fv_o <= r_cmos_fv_o + ((r_cmos_rx_vsync0_in == 2'b01) ? 1 : 0); 
 	end
 	//-----------------------------------------------------------------
-	// Application DDR state, PLL lock and camera frame activity.
-    assign led_o[3:0]=~w_axi_tp[3:0];
+	//------------------------------------------------------------- PWM 跟随相关线网（前置声明，供上方 LED 使用）
+	wire              pwm_motor;
+	wire [3:0]        pwm_status;
+	wire signed [9:0] pwm_ex_dbg;
+	wire              pwm_found_dbg;
+	wire [20:0]       pwm_duty_dbg;
+
+	// GM6020 PWM 三角形跟随状态 + PLL lock + camera frame activity.
+	//   led[0] 视觉域（clk_pixel）：本帧抓到三角形 —— 证明上游识别通了
+	//   led[1] 电机域（clk_sys ）：跨时钟域后收到 found —— 与 led[0] 对比即可判断 CDC 是否断链
+	//   led[2] 误差进入死区（画面中心附近，稳定）
+	//   led[3] 脉宽顶到行程端点
+	// 板载 LED 低电平点亮，所以取反。
+    assign led_o[0]=~pwm_found_dbg;     // 视觉域 found
+    assign led_o[1]=~pwm_status[0];     // 电机域 found（跨域后）
+    assign led_o[2]=~pwm_status[1];     // 进死区
+    assign led_o[3]=~pwm_status[3];     // 顶到端点
     assign led_o[4]=~w_pll_lock;
     assign led_o[5]=r_cmos_fv_o[3];
 
@@ -1250,6 +1272,10 @@ wire                   [  23:0]         pipe_rgb                   ;
 wire                   [   7:0]         w_img_thr                  ;
 wire                   [   7:0]         w_uart_thr                 ;   // uart_cmd 'T' 写入值
 wire                                    w_uart_thr_valid           ;   // 同拍单脉冲
+// 自适应阈值偏移：手动值相对默认值的有符号差（K2/'T' 在 Otsu 模式下
+// 不再是绝对阈值，而是 ±微调；IMG_THR_DEF=12 → 偏移 0）
+wire signed [8:0] w_thr_off = $signed({1'b0, w_img_thr})
+                            - $signed({1'b0, IMG_THR_DEF[7:0]});
 wire                   [   1:0]         r_img_mode                 ;
 wire                   [   1:0]         r_img_view                 ;
 wire                   [   1:0]         r_smooth_mode              ;   // uart_cmd 'S' 寄存器
@@ -1357,6 +1383,8 @@ image_pipeline_top #(.IMG_W(1280),.IMG_H(720),.LATENCY(IMG_LAT),
     .de_i                              (w_rgb_href                ),
     .rgb_i                             ({w_rgb_r, w_rgb_g, w_rgb_b}),
     .thr_i                             (w_img_thr                 ),
+    .auto_en_i                         (1'b1                      ),   // Otsu 自适应阈值开；K2/'T' 变微调偏移
+    .thr_off_i                         (w_thr_off                 ),   // = 手动阈值 − IMG_THR_DEF（有符号）
     .mode_i                            (r_img_mode                ),
     .view_i                            ((r_img_mode==3) ? 2'd0 : (r_img_view==3 ? 2'd3 : 2'd0)),
     .smooth_mode_i                     (w_smooth_mode             ),
@@ -1483,6 +1511,79 @@ FrameBoundCrop #(.SKIP_ROWS(3),.SKIP_COLS(2),.TOTAL_ROWS(720),.TOTAL_COLS(1280))
 
 	
 	
+
+	////////////////////////////////////////////////////////////////
+	//	GM6020 PWM 输出（位置模式，慢速爬行档）
+	//
+	//	clk_sys 96 MHz : PWM 载波 50 Hz，1 us = 96 clk，脉宽零误差
+	//	clk_pixel 74.25 MHz : 视觉域（当前 CREEP 模式不依赖视觉）
+	//
+	//	接线（三根线，P4 排针）：
+	//	  电机 PWM 线 A(白 信号) -> P4 第 39 脚（can_tx_o 脚，本版输出 PWM）
+	//	  电机 PWM 线 C(黑 电源-) -> P4 第 30 脚（GND）
+	//	  电机 PWM 线 B(灰)      -> 悬空（Assistant 调参用）
+	//	  电机 24V 电源正常接；不要再插 CAN 收发器
+	//
+	//	注意：本脚与 CAN 版共用 P4-39，插拔线时别搞混
+	////////////////////////////////////////////////////////////////
+
+	gm6020_pwm_top #(
+		.MAX_OBJECTS (8         ),
+		.GRID_W      (160       ),
+		.GRID_H      (90        ),
+		.TRI_CLASS   (4'd1      ),		// 跟踪目标：1=三角形（当前）2=正方形 3=长方形 4=圆 …
+
+		//--------------------------------------------- 目标门限（阶段0 抗噪，识别不到时可调小）
+		.MIN_SIZE    (2         ),		// 最小边（格）
+		.MAX_SIZE    (48        ),		// 最大边（格）
+		.MIN_AREA    (9         ),		// 最小面积（格^2）：真目标>=3x3 格，噪块通常更小
+
+		.PULSE_MIN   (96_000    ),		// 1000 us -> 0 deg
+		.PULSE_MAX   (184_320   ),		// 1920 us -> theta_max
+		.PULSE_MID   (140_160   ),		// 1460 us 上电中位
+
+		.GAIN_NUM    (44        ),
+		.GAIN_SHIFT  (2         ),
+		.DEADZONE    (3         ),
+		.MAX_STEP    (3_000     ),
+		.DIR_INVERT  (0         ),
+		.LOST_HOLD   (30        ),
+		.RETURN_STEP (200       ),
+		.SEEK_STEP   (400       ),
+		.SEEK_DELAY  (30        ),
+
+		.SELF_TEST   (0         ),		// =1：纯 PWM 自检（不看视觉）；=0：识别三角形并跟转（当前）
+		.CAL_MODE    (0         ),		// 首次上电做行程标定时置 1
+
+		//---------------------------------------------------------------- 往返速度（仅 SELF_TEST=1 时有效）
+		.SCAN_STEP   (192       ),
+
+		//---------------------------------------------------------------- 慢速爬行档（当前生效）
+		//	脉宽在 1400~1600 us 之间以 25 us/s 缓慢往返，约 8 s 单程
+		.CREEP_MODE  (0         ),
+		.CREEP_MIN   (134_400   ),		// 1400 us
+		.CREEP_MAX   (153_600   ),		// 1600 us
+		.CREEP_STEP  (48        ),		// counts / 20 ms = 25 us/s
+
+		//---------------------------------------------------------------- 恒速档
+		.HOLD_PULSE  (0         )
+	) u_pwm_tracker (
+		.clk_pixel   (clk_pixel         ),
+		.rst_pixel_n (rstn_pixel        ),
+		.vsync_i     (shape_vs          ),
+		.objects_i   (geometry_objects  ),
+		.valid_i     (geometry_valid    ),
+		.clk_sys     (clk_sys           ),
+		.rst_sys_n   (rstn_sys          ),
+		.pwm_o       (pwm_motor         ),
+		.status_o    (pwm_status        ),
+		.ex_o        (pwm_ex_dbg        ),
+		.found_o     (pwm_found_dbg     ),
+		.pulse_o     (pwm_duty_dbg      )
+	);
+
+	assign can_tx_o = pwm_motor;	//	PWM 从 P4-39（与 CAN 版共用的球 A9）输出
+
 endmodule
 
 

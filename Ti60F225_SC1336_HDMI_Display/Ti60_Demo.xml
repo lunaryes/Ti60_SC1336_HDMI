@@ -38,6 +38,7 @@
         <efx:design_file name="src/image/median_filter_3x3.v" version="default" library="default" />
         <efx:design_file name="src/image/sobel.v" version="default" library="default" />
         <efx:design_file name="src/image/canny_edge.v" version="default" library="default" />
+        <efx:design_file name="src/image/otsu_thr_gen.v" version="default" library="default" />
         <efx:design_file name="src/image/image_pipeline_top.v" version="default" library="default" />
         <efx:design_file name="src/image/ddr_video_store.v" version="default" library="default" />
         <efx:design_file name="src/display/image_mix.v" version="default" library="default" />
@@ -54,6 +55,15 @@
         <efx:design_file name="src/recognition/shape_geometry_engine.v" version="default" library="default" />
         <efx:design_file name="src/recognition/shape_geometry_top.v" version="default" library="default" />
         <efx:design_file name="src/recognition/shape_geometry_overlay.v" version="default" library="default" />
+        <efx:design_file name="src/pwm_tracker/gm6020_pwm_top.v" version="default" library="default" />
+        <efx:design_file name="src/pwm_tracker/gm6020_pwm_gen.v" version="default" library="default" />
+        <efx:design_file name="src/pwm_tracker/tri_target_extract.v" version="default" library="default" />
+        <efx:design_file name="src/pwm_tracker/axis_cdc.v" version="default" library="default" />
+        <efx:design_file name="src/pwm_tracker/follow_ctrl.v" version="default" library="default" />
+        <efx:design_file name="src/gm6020_can/can_tx.v" version="default" library="default" />
+        <efx:design_file name="src/gm6020_can/can_rx.v" version="default" library="default" />
+        <efx:design_file name="src/gm6020_can/gm6020_if.v" version="default" library="default" />
+        <efx:design_file name="src/gm6020_can/gm6020_can_top.v" version="default" library="default" />
         <efx:design_file name="src/recognition/recognition_object_tracker.v" version="default" library="default" />
         <efx:design_file name="src/recognition/vision_cn_font.v" version="default" library="default" />
         <efx:design_file name="src/recognition/vision_label_cn.v" version="default" library="default" />
