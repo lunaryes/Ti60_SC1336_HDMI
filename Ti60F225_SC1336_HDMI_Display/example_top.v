@@ -1305,7 +1305,7 @@ image_pipeline_top #(.IMG_W(1280),.IMG_H(720),.LATENCY(IMG_LAT),
 //---------------------------------------------------------------------
 wire [10:0] overlay_x;
 wire [9:0] overlay_y;
-wire [23:0] pipe_rgb_detect,geometry_rgb;
+wire [23:0] pipe_rgb_detect,geometry_rgb,center_rgb;
 wire [287:0] geometry_objects;
 wire [7:0] geometry_valid;
 shape_geometry_top u_geometry (
@@ -1316,10 +1316,18 @@ shape_geometry_overlay u_geometry_overlay (
     .x_i(overlay_x),.y_i(overlay_y),.de_i(pipe_de),.enable_i(ocr_overlay_enable),
     .rgb_i(pipe_rgb),.objects_i(geometry_objects),.valid_i(geometry_valid),.rgb_o(geometry_rgb)
 );
-assign pipe_rgb_detect=pipe_de &&
+assign center_rgb=pipe_de &&
  ((overlay_x==628||overlay_x==652)||
  ((overlay_x>=630&&overlay_x<=649)&&(overlay_y==359||overlay_y==360)))
  ?24'hffff00:geometry_rgb;
+wire [4:0] tracking_hud;
+axis_cdc #(.W(5)) u_tracking_hud_cdc (
+ .clk_s(clk_sys),.rst_s_n(rstn_sys),.data_s({track_debug[2],track_status}),.valid_s(1'b1),
+ .clk_d(clk_pixel),.rst_d_n(rstn_pixel),.data_d(tracking_hud),.valid_d());
+tracking_status_overlay u_tracking_hud (
+ .clk(clk_pixel),.rst_n(rstn_pixel),.vsync_i(pipe_vs),.de_i(pipe_de),
+ .x_i(overlay_x),.y_i(overlay_y),.rgb_i(center_rgb),.threshold_i(w_img_thr),
+ .tracking_i(tracking_hud),.rgb_o(pipe_rgb_detect));
 video_xy_counter #(.IMG_W(1280)) u_overlay_xy (
     .clk(clk_pixel),.rst_n(rstn_pixel),.vsync_i(pipe_vs),.de_i(pipe_de),
     .x_o(overlay_x),.y_o(overlay_y)
@@ -1406,6 +1414,9 @@ FrameBoundCrop #(.SKIP_ROWS(3),.SKIP_COLS(2),.TOTAL_ROWS(720),.TOTAL_COLS(1280))
 // Single-axis PWM visual servo; P4-39 output. K2 held = pause.
  parameter MOTOR_SPEED_MODE=0;
  parameter MOTOR_DIR_INVERT=1;
+ wire tracking_enabled;
+ tracking_pause_key u_tracking_pause_key (
+ .clk(clk_sys),.rst_n(rstn_sys),.key_n(key2_i),.enabled_o(tracking_enabled));
  wire [3:0] track_status;
  wire [5:0] track_debug;
  wire signed [9:0] track_error;
@@ -1414,7 +1425,7 @@ FrameBoundCrop #(.SKIP_ROWS(3),.SKIP_COLS(2),.TOTAL_ROWS(720),.TOTAL_COLS(1280))
  .DIR_INVERT(MOTOR_DIR_INVERT)) u_triangle_follow(
  .clk_pixel(clk_pixel),.rst_pixel_n(rstn_pixel),.vsync_i(shape_vs),
  .objects_i(geometry_objects),.valid_i(geometry_valid),
- .clk_sys(clk_sys),.rst_sys_n(rstn_sys),.enable_i(key2_i),
+ .clk_sys(clk_sys),.rst_sys_n(rstn_sys),.enable_i(tracking_enabled),
  .pwm_o(can_tx_o),.status_o(track_status),
  .error_o(track_error),.pulse_o(track_pulse),.debug_o(track_debug));
 endmodule

@@ -15,6 +15,7 @@ module triangle_follow_ctrl #(
  reg signed [9:0] error;
  reg found,fresh,centered;
  reg [1:0] hits,en_sync;
+ reg enable_prev;
  reg signed [31:0] step,next_p;
  wire usable=en_sync[1] && found && hits>=2 && age<TIMEOUT;
  assign status_o={pulse_o==LO||pulse_o==HI,!usable,centered&&usable,usable};
@@ -36,9 +37,10 @@ module triangle_follow_ctrl #(
  always @(posedge clk or negedge rst_n) begin
   if(!rst_n) begin
    pulse_o<=SPEED_MODE?NEUTRAL:MID;age<=TIMEOUT;
-   error<=0;found<=0;fresh<=0;centered<=1;hits<=0;en_sync<=0;
+   error<=0;found<=0;fresh<=0;centered<=1;hits<=0;en_sync<=0;enable_prev<=0;
   end else begin
    en_sync<={en_sync[0],enable_i};
+   enable_prev<=en_sync[1];
    if(age<TIMEOUT) age<=age+1'b1;
    if(tick_i) begin
     if(!usable) begin
@@ -55,13 +57,13 @@ module triangle_follow_ctrl #(
     end
     fresh<=0;
    end
-   if(sample_i) begin
+   if(sample_i && en_sync[1] && enable_prev) begin
     age<=0;error<=ex_i;found<=found_i;fresh<=1;
     if(!found_i) hits<=0;
     else if(hits<2) hits<=hits+1'b1;
    end
-   if(!en_sync[1] || (age>=TIMEOUT && !sample_i)) begin
-    hits<=0;centered<=1;
+   if(!en_sync[1] || !enable_prev || (age>=TIMEOUT && !sample_i)) begin
+    hits<=0;centered<=1;fresh<=0;found<=0;age<=TIMEOUT;error<=0;
     if(SPEED_MODE) pulse_o<=NEUTRAL;
    end
   end
