@@ -29,11 +29,13 @@
 //   约束  : 每行 de 周期数 = IMG_W（与 src/isp/FrameBoundCrop.v 的假设一致，
 //           对应 lcd_para.v 的 H_DISP = 1280 / V_DISP = 720）
 //
+// Display-only gamma 0.70 brightens gray/RGB before yellow blending.
 // mode 3 使用已对齐的边缘亮度作掩码，不增加帧缓存或流水线延迟。
 //////////////////////////////////////////////////////////////////////////////////
 module image_mix #(
     parameter IMG_W = 1280,
-    parameter IMG_H = 720
+    parameter IMG_H = 720,
+    parameter DISPLAY_GAMMA_ENABLE = 1
 )(
     input  wire        clk_i,
     input  wire        rst_ni,
@@ -72,7 +74,21 @@ module image_mix #(
     // 输出选择
     //------------------------------------------------------------------
     wire        in_right  = (col_cnt >= HALF_W);                // 右半列
-    wire [23:0] split_rgb = in_right ? edge_rgb_i : gray_rgb_i;
+    // Only the displayed RGB/gray branches are corrected. The upstream
+    // Canny/geometry inputs and AA coverage remain unchanged.
+    wire [23:0] display_orig;
+    wire [7:0] display_y;
+    wire [23:0] display_gray={display_y,display_y,display_y};
+    generate if(DISPLAY_GAMMA_ENABLE) begin: gamma_display
+        display_gamma_lut r(orig_rgb_i[23:16],display_orig[23:16]);
+        display_gamma_lut g(orig_rgb_i[15:8],display_orig[15:8]);
+        display_gamma_lut b(orig_rgb_i[7:0],display_orig[7:0]);
+        display_gamma_lut y(gray_rgb_i[7:0],display_y);
+    end else begin: gamma_bypass
+        assign display_orig=orig_rgb_i;
+        assign display_y=gray_rgb_i[7:0];
+    end endgenerate
+    wire [23:0] split_rgb = in_right ? edge_rgb_i : display_gray;
     // Mode 3 receives grayscale AA coverage: 0=original, 255=yellow.
     // Rounded division by 255 without a divider; endpoints are exact.
     function [7:0] scale_coverage;
@@ -86,11 +102,11 @@ module image_mix #(
         end
     endfunction
     wire [7:0] alpha=edge_rgb_i[7:0];
-    wire [7:0] tint_r=orig_rgb_i[23:16]+scale_coverage(8'd255-orig_rgb_i[23:16],alpha);
-    wire [7:0] tint_g=orig_rgb_i[15:8]+scale_coverage(8'd255-orig_rgb_i[15:8],alpha);
-    wire [7:0] tint_b=orig_rgb_i[7:0]-scale_coverage(orig_rgb_i[7:0],alpha);
+    wire [7:0] tint_r=display_orig[23:16]+scale_coverage(8'd255-display_orig[23:16],alpha);
+    wire [7:0] tint_g=display_orig[15:8]+scale_coverage(8'd255-display_orig[15:8],alpha);
+    wire [7:0] tint_b=display_orig[7:0]-scale_coverage(display_orig[7:0],alpha);
     wire [23:0] overlay_rgb={tint_r,tint_g,tint_b};
-    wire [23:0] split_overlay_rgb = in_right ? overlay_rgb : gray_rgb_i;
+    wire [23:0] split_overlay_rgb = in_right ? overlay_rgb : display_gray;
 
     //------------------------------------------------------------------
     // 唯一的输出寄存器：数据与 vsync/de 同块寄存，延迟恒为 1 拍
@@ -104,11 +120,11 @@ module image_mix #(
             vsync_o <= vsync_i;
             de_o    <= de_i;
             case(mode_i)
-                2'd0    : rgb_o <= orig_rgb_i;   // 原图
+                2'd0    : rgb_o <= display_orig;   // 原图
                 2'd1    : rgb_o <= edge_rgb_i;   // 边缘图
                 2'd2    : rgb_o <= split_rgb;    // 分屏：左半灰度 + 右半边缘图
                 2'd3    : rgb_o <= split_overlay_rgb; // 左灰度 + 右原图叠加亮黄色边缘
-                default : rgb_o <= orig_rgb_i;
+                default : rgb_o <= display_orig;
             endcase
         end
     end

@@ -64,6 +64,7 @@
         <efx:design_file name="src/control/tracking_pause_key.v" version="default" library="default" />
         <efx:design_file name="src/control/tracking_config_guard.v" version="default" library="default" />
         <efx:design_file name="src/display/tracking_status_overlay.v" version="default" library="default" />
+        <efx:design_file name="src/display/display_gamma_lut.v" version="default" library="default" />
         <efx:top_vhdl_arch name="" />
         <efx:msg_config name="" />
         <efx:partition_definitions name="" />
