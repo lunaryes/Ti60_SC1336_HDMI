@@ -168,8 +168,8 @@ begin
     138:  LUT_DATA = {16'h3943,8'hdc};
     139:  LUT_DATA = {16'h3952,8'h02};
     140:  LUT_DATA = {16'h3953,8'h0f};
-    141:  LUT_DATA = {16'h3e01,8'h5d};
-    142:  LUT_DATA = {16'h3e02,8'h80};
+    141:  LUT_DATA = {16'h3e01,8'h38};
+    142:  LUT_DATA = {16'h3e02,8'h40};
     143:  LUT_DATA = {16'h3e08,8'h1f};
     144:  LUT_DATA = {16'h3e1b,8'h14};
     145:  LUT_DATA = {16'h4509,8'h1c};

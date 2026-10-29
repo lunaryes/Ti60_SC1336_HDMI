@@ -157,6 +157,12 @@
         <efxpt:comp_gpio name="clk_p" gpio_def="GPIOR_P_09" mode="output" bus_name="" io_standard="1.5 V SSTL">
             <efxpt:output_config name="clk_p_hi" name_ddio_lo="clk_p_lo" register_option="register" clock_name="tdqss_clk" is_clock_inverted="false" is_slew_rate="false" tied_option="none" ddio_type="resync" delay="0" is_serial="false" drive_strength="8" fastclk_name=""/>
         </efxpt:comp_gpio>
+        <efxpt:comp_gpio name="can_rx_i" gpio_def="GPIOT_P_11" mode="input" bus_name="" io_standard="1.8 V LVCMOS">
+            <efxpt:input_config name="can_rx_i" name_ddio_lo="" conn_type="normal" is_register="false" clock_name="" is_clock_inverted="false" pull_option="weak pullup" is_schmitt_trigger="false" ddio_type="none" is_bus_hold="false" delay="0" is_serial="false" is_dyn_delay="false" fastclk_name="" pullup_ena_name="can_rx_i_PULL_UP_ENA" dyn_delay_en_name="can_rx_i_DLY_ENA" dyn_delay_reset_name="can_rx_i_DLY_RST" dyn_delay_ctrl_name="can_rx_i_DLY_CTRL" clkmux_buf_name=""/>
+        </efxpt:comp_gpio>
+        <efxpt:comp_gpio name="can_tx_o" gpio_def="GPIOT_N_11" mode="output" bus_name="" io_standard="1.8 V LVCMOS">
+            <efxpt:output_config name="can_tx_o" name_ddio_lo="" register_option="none" clock_name="" is_clock_inverted="false" is_slew_rate="false" tied_option="none" ddio_type="none" delay="0" is_serial="false" drive_strength="4" fastclk_name=""/>
+        </efxpt:comp_gpio>
         <efxpt:comp_gpio name="cmos_data[0]" gpio_def="GPIOL_01" mode="input" bus_name="cmos_data" io_standard="3.3 V LVCMOS">
             <efxpt:input_config name="cmos_data[0]" name_ddio_lo="" conn_type="normal" is_register="true" clock_name="cmos_pclk" is_clock_inverted="true" pull_option="none" is_schmitt_trigger="false" ddio_type="none" is_bus_hold="false" delay="0" is_serial="false" is_dyn_delay="false" fastclk_name="" pullup_ena_name="cmos_data_PULL_UP_ENA[0]" dyn_delay_en_name="cmos_data_DLY_ENA[0]" dyn_delay_reset_name="cmos_data_DLY_RST[0]" dyn_delay_ctrl_name="cmos_data_DLY_CTRL[0]" clkmux_buf_name=""/>
         </efxpt:comp_gpio>
@@ -379,8 +385,11 @@
         <efxpt:comp_gpio name="lcd_blen_o" gpio_def="GPIOL_P_16" mode="output" bus_name="" io_standard="1.8 V LVCMOS">
             <efxpt:output_config name="lcd_blen_o" name_ddio_lo="" register_option="none" clock_name="" is_clock_inverted="false" is_slew_rate="false" tied_option="none" ddio_type="none" delay="0" is_serial="false" drive_strength="4" fastclk_name=""/>
         </efxpt:comp_gpio>
-        <efxpt:comp_gpio name="lcd_de_o" gpio_def="GPIOL_P_02" mode="output" bus_name="" io_standard="1.8 V LVCMOS">
-            <efxpt:output_config name="lcd_de_o" name_ddio_lo="" register_option="none" clock_name="" is_clock_inverted="false" is_slew_rate="false" tied_option="none" ddio_type="none" delay="0" is_serial="false" drive_strength="4" fastclk_name=""/>
+        <!-- ★ 2026-10-16：GPIOL_P_02（N2，CSI）原分给 lcd_de_o，但该端口在 example_top
+             里从未被驱动（显示走 HDMI），改为 Canny 阈值按键 K1。注意 lcd_de_o 因此
+             不再有引脚分配 —— 它是本设计里的残留端口，等确认后可以删。 -->
+        <efxpt:comp_gpio name="key1_i" gpio_def="GPIOL_P_02" mode="input" bus_name="" io_standard="1.8 V LVCMOS">
+            <efxpt:input_config name="key1_i" name_ddio_lo="" conn_type="normal" is_register="false" clock_name="" is_clock_inverted="false" pull_option="weak pullup" is_schmitt_trigger="false" ddio_type="none" is_bus_hold="false" delay="0" is_serial="false" is_dyn_delay="false" fastclk_name="" pullup_ena_name="key1_i_PULL_UP_ENA" dyn_delay_en_name="key1_i_DLY_ENA" dyn_delay_reset_name="key1_i_DLY_RST" dyn_delay_ctrl_name="key1_i_DLY_CTRL" clkmux_buf_name=""/>
         </efxpt:comp_gpio>
         <efxpt:comp_gpio name="lcd_g7_0_io[0]" gpio_def="GPIOL_P_03" mode="inout" bus_name="lcd_g7_0_io" io_standard="1.8 V LVCMOS">
             <efxpt:input_config name="lcd_g7_0_i[0]" name_ddio_lo="" conn_type="normal" is_register="false" clock_name="" is_clock_inverted="false" pull_option="none" is_schmitt_trigger="false" ddio_type="none" is_bus_hold="false" delay="0" is_serial="false" is_dyn_delay="false" fastclk_name="" pullup_ena_name="lcd_g7_0_o_PULL_UP_ENA[0]" dyn_delay_en_name="lcd_g7_0_io_DLY_ENA[0]" dyn_delay_reset_name="lcd_g7_0_io_DLY_RST[0]" dyn_delay_ctrl_name="lcd_g7_0_io_DLY_CTRL[0]" clkmux_buf_name=""/>
@@ -425,8 +434,11 @@
         <efxpt:comp_gpio name="lcd_hs_o" gpio_def="GPIOL_P_06" mode="output" bus_name="" io_standard="1.8 V LVCMOS">
             <efxpt:output_config name="lcd_hs_o" name_ddio_lo="" register_option="none" clock_name="" is_clock_inverted="false" is_slew_rate="false" tied_option="none" ddio_type="none" delay="0" is_serial="false" drive_strength="4" fastclk_name=""/>
         </efxpt:comp_gpio>
-        <efxpt:comp_gpio name="lcd_pclk_o" gpio_def="GPIOL_N_02" mode="clkout" bus_name="" io_standard="1.8 V LVCMOS">
-            <efxpt:output_config name="" name_ddio_lo="" register_option="none" clock_name="clk_lvds_1x" is_clock_inverted="true" is_slew_rate="false" tied_option="none" ddio_type="none" delay="15" is_serial="false" drive_strength="8" fastclk_name=""/>
+        <!-- ★ 2026-10-16：GPIOL_N_02（M2，CSO）原分给 lcd_pclk_o（一个 clkout，而且
+             lcd_pclk_o 的端口声明在 example_top 里本来就是注释掉的），改为 Canny
+             阈值按键 K2。 -->
+        <efxpt:comp_gpio name="key2_i" gpio_def="GPIOL_N_02" mode="input" bus_name="" io_standard="1.8 V LVCMOS">
+            <efxpt:input_config name="key2_i" name_ddio_lo="" conn_type="normal" is_register="false" clock_name="" is_clock_inverted="false" pull_option="weak pullup" is_schmitt_trigger="false" ddio_type="none" is_bus_hold="false" delay="0" is_serial="false" is_dyn_delay="false" fastclk_name="" pullup_ena_name="key2_i_PULL_UP_ENA" dyn_delay_en_name="key2_i_DLY_ENA" dyn_delay_reset_name="key2_i_DLY_RST" dyn_delay_ctrl_name="key2_i_DLY_CTRL" clkmux_buf_name=""/>
         </efxpt:comp_gpio>
         <efxpt:comp_gpio name="lcd_pwm_o" gpio_def="GPIOL_N_16" mode="output" bus_name="" io_standard="1.8 V LVCMOS">
             <efxpt:output_config name="lcd_pwm_o" name_ddio_lo="" register_option="none" clock_name="" is_clock_inverted="false" is_slew_rate="false" tied_option="none" ddio_type="none" delay="0" is_serial="false" drive_strength="4" fastclk_name=""/>
