@@ -243,6 +243,18 @@ module example_top
 	
 	
 	////////////////////////////////////////////////////////////////
+	//	User Buttons —— Canny 阈值现场调节
+	//	1.8 V LVCMOS，外部 10k 上拉、按下为 0；K3 = CRESET_N 不可用。
+	//	★ 2026-10-16：GPIOL_P_02 / GPIOL_N_02 原分给 lcd_de_o / lcd_pclk_o，但这两个
+	//	  LCD 端口在本设计里从未被驱动（lcd_pclk_o 的端口声明本身就是注释掉的），
+	//	  而显示走 HDMI，所以把这两个脚改分给按键（Ti60_Demo.peri.xml 同步改）。
+	input 		 	key1_i,				//	K1 = CSI = GPIOL_P_02 -> Canny 阈值循环 +4
+	output wire can_tx_o,
+    input wire can_rx_i,
+    input 		 	key2_i,				//	K2 = CSO = GPIOL_N_02 -> hold to pause tracking
+
+
+	////////////////////////////////////////////////////////////////
 	//	UART Interface
 	input 		 	uart_rx_i,			//	Support 460800-8-N-1. 
 	output 		 	uart_tx_o, 
@@ -622,7 +634,7 @@ module example_top
 		.alen_o			(w_ddr3_alen),
 		.atype_o			(w_ddr3_atype),
 		.avalid_o			(w_ddr3_avalid),
-		.aready_i			(w_ddr3_aready)
+		.aready_i			(w_ddr3_aready && r_ddr_unlock)
 	);
 	
 	assign w_ddr3_asize = 4; 		//	Fixed 128 bits (16 bytes, size = 4)
@@ -789,7 +801,12 @@ module example_top
 		r_cmos_rx_vsync0_in <= {r_cmos_rx_vsync0_in, cmos_vsync}; 
 		r_cmos_fv_o <= r_cmos_fv_o + ((r_cmos_rx_vsync0_in == 2'b01) ? 1 : 0); 
 	end
-	assign led_o[5] = r_cmos_fv_o[3]; 
+	//-----------------------------------------------------------------
+	// Application DDR state, PLL lock and camera frame activity.
+    assign led_o[3:0]=~track_debug[3:0];
+    assign led_o[4]=~track_debug[4];
+    assign led_o[5]=~track_debug[5];
+
 	
 	
 	
@@ -993,10 +1010,28 @@ module example_top
 	wire 			w_wframe_vsync; 
 	wire 	[7:0] 	w_axi_tp; 
 	
-	axi4_ctrl #(.C_RD_END_ADDR(1280 * 720), .C_W_WIDTH(CSI_DATA_WIDTH), .C_R_WIDTH(8), .C_ID_LEN(4)) u_axi4_ctrl (
+    wire [2:0] app_play_mode;
+    wire app_status_req,app_status_valid;
+    wire [3:0] app_age_a,app_age_b;
+    wire [7:0] app_replay_div;
+    wire [31:0] app_status_sys,app_status_pixel;
+    frame_status_mailbox status_mailbox(
+        .src_clk(clk_sys),.src_rst(rst_sys),.src_status(app_status_sys),
+        .dst_clk(clk_pixel),.dst_rst(~rstn_pixel),.request_i(app_status_req),
+        .valid_o(app_status_valid),.status_o(app_status_pixel));
+    // Gate both sides of the DDR command handshake until calibration completes.
+    // Otherwise the address bridge can acknowledge a command that never reached
+    // the gated DDR input, leaving a master waiting forever for its response.
+    wire ddr_app_reset=w_ddr3_ui_rst || !r_ddr_unlock;
+    wire [31:0] raw_status;
+    assign app_status_sys=raw_status;
+    assign w_ddr3_wstrb=16'hffff;
+    assign w_ddr3_arid=0;
+    assign w_ddr3_rready=1'b1;
+	ddr_video_store #(.C_RD_END_ADDR(1280 * 720), .C_W_WIDTH(CSI_DATA_WIDTH), .C_R_WIDTH(8), .C_ID_LEN(4)) u_axi4_ctrl (
 
 		.axi_clk        (w_ddr3_ui_clk            ),
-		.axi_reset      (w_ddr3_ui_rst            ),
+		.axi_reset      (ddr_app_reset            ),
 
 		.axi_awaddr     (w_ddr3_awaddr       ),
 		.axi_awlen      (w_ddr3_awlen        ),
@@ -1004,16 +1039,16 @@ module example_top
 		.axi_awready    (w_ddr3_awready      ),
 
 		.axi_wdata      (w_ddr3_wdata        ),
-		.axi_wstrb      (w_ddr3_wstrb        ),
+		.axi_wstrb      (),
 		.axi_wlast      (w_ddr3_wlast        ),
 		.axi_wvalid     (w_ddr3_wvalid       ),
 		.axi_wready     (w_ddr3_wready       ),
 
 		.axi_bid        (0          ),
-		.axi_bresp      (0        ),
-		.axi_bvalid     (1       ),
+		.axi_bresp      (w_ddr3_bresp),
+		.axi_bvalid     (w_ddr3_bvalid),
 
-		.axi_arid       (w_ddr3_arid         ),
+		.axi_arid       (),
 		.axi_araddr     (w_ddr3_araddr       ),
 		.axi_arlen      (w_ddr3_arlen        ),
 		.axi_arvalid    (w_ddr3_arvalid      ),
@@ -1021,10 +1056,10 @@ module example_top
 
 		.axi_rid        (w_ddr3_rid          ),
 		.axi_rdata      (w_ddr3_rdata        ),
-		.axi_rresp      (0        ),
+		.axi_rresp      (w_ddr3_rresp),
 		.axi_rlast      (w_ddr3_rlast        ),
 		.axi_rvalid     (w_ddr3_rvalid       ),
-		.axi_rready     (w_ddr3_rready       ),
+		.axi_rready     (),
 
 		.wframe_pclk    (cmos_pclk          ),
 		.wframe_vsync   (cmos_frame_vsync), //w_wframe_vsync   ),		//	Writter VSync. Flush on rising edge. Connect to EOF. 
@@ -1036,9 +1071,12 @@ module example_top
 		.rframe_data_en (lcd_request             ),
 		.rframe_data    (lcd_data           ),
 		
-		.tp_o 		(w_axi_tp)
+		.play_mode_i(app_play_mode),.tnr_enable_i(1'b0),
+        .age_a_i(app_age_a),.age_b_i(app_age_b),.replay_div_i(app_replay_div),
+        .status_o(raw_status),.display_source_o(),
+        .tp_o 		(w_axi_tp)
 	);
-	assign led_o[3:0] = w_axi_tp; 
+	//assign led_o[3:0] = w_axi_tp; 	// See application LED assignments above
 	
 	
 	
@@ -1099,59 +1137,229 @@ module example_top
 wire [7:0] w_rgb_r;
 wire [7:0] w_rgb_g;
 wire [7:0] w_rgb_b;
-wire     [17:0]     w_rgb_r_mult = w_rgb_pre_r * 409; 
-wire     [17:0]     w_rgb_b_mult = w_rgb_pre_b * 384; 
-assign w_rgb_r = w_rgb_r_mult[17:16] ? 8'hFF : w_rgb_r_mult[15: 8]; 
-assign w_rgb_g = w_rgb_pre_g; 
-assign w_rgb_b = w_rgb_b_mult[17:16] ? 8'hFF : w_rgb_b_mult[15: 8]; 
+// ★ 2026-10-15：两个增益从写死的常数（409/384）改成**运行时可调寄存器**（由 uart_cmd 给出；
+//   复位值 102/96 与 409/384 只差 0.25%/0%，不插串口时画面与改动前逐像素一致）。
+//   动机：上板实测"白墙在正常室内白灯下发青" = 相机链路 R 通道偏低，写死的 ×1.6 补不回来；
+//   而调这个系数要试好几轮，所以做成旋钮（'A'/'B' 命令）而不是改常数反复综合。
+//   定点：增益 = byte/64；R' = (R*gain)>>6，饱和判据 (R*gain) >= 256*64 = 16384。
+wire     [   7:0]   r_awb_gain;                       // 来自 uart_cmd（复位 102 ≈ ×1.59）
+wire     [   7:0]   b_awb_gain;                       // 来自 uart_cmd（复位  96  = ×1.50）
+wire     [15:0]     w_rgb_r_mult = w_rgb_pre_r * r_awb_gain;
+wire     [15:0]     w_rgb_b_mult = w_rgb_pre_b * b_awb_gain;
+wire     [ 9:0]     w_rgb_r_sc   = w_rgb_r_mult[15:6];
+wire     [ 9:0]     w_rgb_b_sc   = w_rgb_b_mult[15:6];
+assign w_rgb_r = (w_rgb_r_mult >= 16'd16384) ? 8'hFF : w_rgb_r_sc[7:0];
+assign w_rgb_g = w_rgb_pre_g;
+assign w_rgb_b = (w_rgb_b_mult >= 16'd16384) ? 8'hFF : w_rgb_b_sc[7:0];
 
 // =========================================================================================================================================
-// Image pipeline : rgb_to_gray -> pix_window_3x3 -> sobel_edge -> image_mix
+// Image pipeline : rgb_to_gray -> pix_window_3x3 -> canny_edge -> image_mix
 // 插入点：AWB 之后、FrameBoundCrop 之前（docs/ARCH.md §1），全部在 clk_pixel 单域
 // =========================================================================================================================================
-localparam IMG_MODE = 2'd3;      // 0=原图 1=边缘图 2=分屏(左原图+右边缘) 3=画中画(暂等同分屏)
-localparam IMG_THR  = 8'd40;     // Sobel 阈值：edge = mag > thr
+localparam IMG_MODE_DEF = 2'd3;  // 0=原图 1=边缘图 2=分屏(左灰度+右边缘) 3=左灰度+右原图叠加亮黄色边缘（默认）
+localparam IMG_VIEW_DEF = 2'd0;  // 0=灰度抗锯齿边缘图 1=mag8 图 2=六状态假彩图 3=Y 图
+                                 // （四种视图的口径见 image_pipeline_top 的【view_i】）
+localparam IMG_THR_DEF  = 8'd12; // Canny 强边阈值（内部 mag8 = mag>>3 域，弱边 = 该值/2）
+                                 // ★★ 从 40 → 16 → 12：原值 40 实际要求满幅 **42%** 的对比度
+                                 //    （这个口不是 0..255 量程），是"只有高对比度才出边"的根因；
+                                 //    2026-10-15 上板扫出来的最佳工作点是 12（除最暗的紫/灰外全部
+                                 //    检出、且没有多余细线），所以复位值落 12。完整的反查标尺见
+                                 //    canny_edge.v 头注释。
+                                 //    ★ 2026-10-16：这个值现在是**按键控制器的复位值**
+                                 //      （2026-10-17 起：K2 循环阈值 4..48、步长 1；K1 循环
+                                 //      平滑模式），上板后不插串口、不重综合就能改；
+                                 //      见下面的 canny_threshold_key_ctrl 例化。
+                                 //    ★ 若以后把采集端修好（AWB/曝光/换打印纸卡），可以再抬回 16。
+localparam IMG_LAT      = 24;    // = image_pipeline_top 的 LATENCY，两处必须一致
+                                 //   （2026-10-17 接入 3x3 中值：+1 中值 +2 后级窗口）
 
 wire                                    pipe_vs                    ;
 wire                                    pipe_de                    ;
 wire                   [  23:0]         pipe_rgb                   ;
+wire                   [   7:0]         w_img_thr                  ;
+wire                   [   7:0]         w_uart_thr                 ;   // uart_cmd 'T' 写入值
+wire                                    w_uart_thr_valid           ;   // 同拍单脉冲
+wire                   [   1:0]         r_img_mode                 ;
+wire                   [   1:0]         r_img_view                 ;
+wire                   [   1:0]         r_smooth_mode              ;   // uart_cmd 'S' 寄存器
+wire                                    r_smooth_valid             ;   // 同拍单脉冲
+wire                                    ocr_overlay_enable         ;   // UART 'E': annotation A/B
+wire                   [   1:0]         w_smooth_mode              ;   // 实际生效（按键也会改）
 
-image_pipeline_top #(.IMG_W(1280),.IMG_H(720)) u_image_pipeline(
+//---------------------------------------------------------------------
+// Application UART: controls and atomic frame-store status only.
+wire cmd_tx_busy,cmd_tx;
+wire uart_cmd_rx=uart_rx_i;
+
+//---------------------------------------------------------------------
+// 串口命令接口：把 view / mode 从编译期常量变成运行时寄存器，现场调参不用
+// 重新综合。uart_rx_i / uart_tx_o 早已声明并在 Ti60_Demo.peri.xml 里分配了
+// 引脚（GPIOT_N_16 / GPIOT_P_16），此前全工程从未引用。跑在 clk_pixel 域，
+// 与流水线同域，不需要 CDC。
+// 命令格式（2 字节帧：命令 + 参数）：'T'<thr> 'S'<smooth> 'V'<view> 'M'<mode>，
+// 'A'<AWB R 增益>，'B'<AWB B 增益>，'R' 回读 8 字节
+// {thr, view, mode, gain_r, gain_b, smooth, 0(保留位), '\n'}。详见 src/common/uart_cmd.v。
+//
+// ★ 2026-10-17：**阈值/平滑串口控制**（与按键并存，串口优先）。
+//   thr_o/thr_valid_o、smooth_o/smooth_valid_o 接到下面
+//   canny_threshold_key_ctrl 的对应 uart 输入：
+//   · 'T'<byte> 写入即生效，量程 0..255；K2 循环阈值，步长 1、范围 4..48；
+//   · 'S'<byte> 写平滑模式 0/1/2（>2 截断）；K1 循环 0→1→2→0；
+//   · 'R' 回读的第 1/6 字节分别是实际生效阈值/平滑模式（含按键修改）。
+//---------------------------------------------------------------------
+uart_cmd #(
+    .CLK_FREQ (74250000),        // clk_pixel
+    .BAUD     (460800),
+    .THR_DEF  (IMG_THR_DEF),     // 'T' 写入前的回读值；与按键控制器默认值相同
+    .VIEW_DEF (IMG_VIEW_DEF),
+    .MODE_DEF (IMG_MODE_DEF)
+) u_uart_cmd (
+    .clk    (clk_pixel                 ),
+    .rst_n  (rstn_pixel                ),
+    .rx_i   (uart_cmd_rx               ),   // 直方图忙时被拉高（见上）
+    .tx_o   (cmd_tx                    ),   // Application UART TX
+
+    .thr_read_i   (w_img_thr            ),   // 'R' 回读实际生效阈值（含按键）
+    .smooth_read_i(w_smooth_mode        ),   // 'R' 回读实际生效平滑模式
+    .thr_o       (w_uart_thr           ),   // 'T' 写入 → 按键控制器（串口优先）
+    .thr_valid_o (w_uart_thr_valid     ),   // 同拍单脉冲
+    .view_o (r_img_view                ),
+    .mode_o (r_img_mode                ),
+    .smooth_o (r_smooth_mode           ),   // 'S' 写入 → 按键控制器
+    .smooth_valid_o (r_smooth_valid    ),   // 同拍单脉冲
+
+    .gain_r_o (r_awb_gain              ),   // AWB R 增益（1/64 定点，复位 112 = ×1.75）
+    .gain_b_o (b_awb_gain              ),   // AWB B 增益（复位 96 = ×1.50）
+    .ocr_enable_o(ocr_overlay_enable   ),
+
+    .play_mode_o(app_play_mode),
+    .age_a_o(app_age_a),.age_b_o(app_age_b),.replay_div_o(app_replay_div),
+    .status_req_o(app_status_req),.status_valid_i(app_status_valid),.app_status_i(app_status_pixel),
+    .hist_req_o (),   // Historical diagnostic request, unused
+    .tx_busy_o  (cmd_tx_busy           )    // Application command reply busy
+);
+
+//---------------------------------------------------------------------
+// Canny 阈值/平滑控制（K1 / K2 + 串口 'T'/'S'）—— 两个参数的唯一来源
+//   模块自带 2FF 同步 + 20 ms 消抖 + 按下沿事件，全在 clk_pixel 域，与流水线同域。
+//   K1 循环加4：4,8,...,32,4；K2 独立用于按住暂停跟踪。
+//   默认标准高斯，平滑仅通过串口 S 控制。UART T/S 优先于按键。
+//   按住不放不会连续步进；不按则参数保持不变。
+//---------------------------------------------------------------------
+canny_threshold_key_ctrl #(
+    .CLK_FREQ_HZ (74250000),     // clk_pixel
+    .DEBOUNCE_MS (20),
+    .THR_DEFAULT (IMG_THR_DEF),
+    .THR_MIN     (8'd4),
+    .THR_MAX     (8'd32),
+    .THR_STEP    (8'd4)
+) u_canny_thr_key (
+    .clk   (clk_pixel                  ),
+    .rst_n (rstn_pixel                 ),
+
+    .key_data          ({1'b1, key1_i}),   // K1 cyclic threshold +4; K2 reserved for motor pause
+    .uart_thr_valid_i  (w_uart_thr_valid),   // 'T' 单拍脉冲（串口优先）
+    .uart_thr_i        (w_uart_thr     ),    // 'T' 写入值，量程 0..255
+    .uart_smooth_valid_i (r_smooth_valid),   // 'S' 单拍脉冲（串口优先）
+    .uart_smooth_i     (r_smooth_mode  ),    // 'S' 写入值，0..2
+
+    .threshold_o       (w_img_thr      ),    // -> image_pipeline_top.thr_i
+    .threshold_low_o   (               ),    // 流水线内部自己算 thr_low = thr_i >> 1
+    .smooth_mode_o     (w_smooth_mode  ),    // -> image_pipeline_top.smooth_mode_i
+    .key_press_o       (               )     // 单拍按下脉冲：只在板上用 ILA 才看得到
+);
+
+wire shape_edge,shape_de,shape_vs;
+image_pipeline_top #(.IMG_W(1280),.IMG_H(720),.LATENCY(IMG_LAT),
+                     .WEAK_STRUCT(1),.EDGE_AA(1)) u_image_pipeline(   // Application edge/gray views; weak structure retained
     .clk_i                             (clk_pixel                 ),
     .rst_ni                            (rstn_pixel                ),
 
     .vsync_i                           (w_rgb_vsync               ),
     .de_i                              (w_rgb_href                ),
     .rgb_i                             ({w_rgb_r, w_rgb_g, w_rgb_b}),
-    .thr_i                             (IMG_THR                   ),
-    .mode_i                            (IMG_MODE                  ),
+    .thr_i                             (w_img_thr                 ),
+    .mode_i                            (r_img_mode                ),
+    .view_i                            ((r_img_mode==3) ? 2'd0 : (r_img_view==3 ? 2'd3 : 2'd0)),
+    .smooth_mode_i                     (w_smooth_mode             ),
 
     .vsync_o                           (pipe_vs                   ),
     .de_o                              (pipe_de                   ),
-    .rgb_o                             (pipe_rgb                  )
+    .rgb_o                             (pipe_rgb                  ),
+
+    // M6 调试抽头：中值后、Canny 实际看到的 Y/de/vs（不增加逻辑）
+    .dbg_y_o                           (),
+    .dbg_de_o                          (),
+    .dbg_vs_o                          (),
+
+    .dbg_edge_o                        (shape_edge),
+    .dbg_edge_de_o                     (shape_de),
+    .dbg_edge_vs_o                     (shape_vs)
 );
 
-// hsync 要比 de 早 8 个像素才与流水线后的数据同拍（= image_pipeline_top 的 LATENCY），
-// 否则 rgb2dvi 送出的 HS 与 DE 错位，HDMI 画面横移。
-reg [7:0] r_hs_dly = 8'd0;
+//---------------------------------------------------------------------
+// Shape-only recognition profile. Character RTL is retained in src/recognition
+// for future integration; the active project excludes its detection chain.
+// Coordinates follow the final pipeline stream. Annotations are combinational
+// and do not change video timing or the DDR/IIR path.
+//---------------------------------------------------------------------
+wire [10:0] overlay_x;
+wire [9:0] overlay_y;
+wire [23:0] pipe_rgb_detect,geometry_rgb,center_rgb;
+wire [287:0] geometry_objects;
+wire [7:0] geometry_valid;
+shape_geometry_top u_geometry (
+    .clk(clk_pixel),.rst_n(rstn_pixel),.vsync_i(shape_vs),.de_i(shape_de),.edge_i(shape_edge),
+    .objects_o(geometry_objects),.valid_o(geometry_valid),.busy_o(),.rejected_o(),.cycles_o()
+);
+shape_geometry_overlay u_geometry_overlay (
+    .x_i(overlay_x),.y_i(overlay_y),.de_i(pipe_de),.enable_i(ocr_overlay_enable),
+    .rgb_i(pipe_rgb),.objects_i(geometry_objects),.valid_i(geometry_valid),.rgb_o(geometry_rgb)
+);
+assign center_rgb=pipe_de &&
+ ((overlay_x==628||overlay_x==652)||
+ ((overlay_x>=630&&overlay_x<=649)&&(overlay_y==359||overlay_y==360)))
+ ?24'hffff00:geometry_rgb;
+wire [4:0] tracking_hud;
+axis_cdc #(.W(5)) u_tracking_hud_cdc (
+ .clk_s(clk_sys),.rst_s_n(rstn_sys),.data_s({track_debug[2],track_status}),.valid_s(1'b1),
+ .clk_d(clk_pixel),.rst_d_n(rstn_pixel),.data_d(tracking_hud),.valid_d());
+tracking_status_overlay u_tracking_hud (
+ .clk(clk_pixel),.rst_n(rstn_pixel),.vsync_i(pipe_vs),.de_i(pipe_de),
+ .x_i(overlay_x),.y_i(overlay_y),.rgb_i(center_rgb),.threshold_i(w_img_thr),
+ .tracking_i(tracking_hud),.rgb_o(pipe_rgb_detect));
+video_xy_counter #(.IMG_W(1280)) u_overlay_xy (
+    .clk(clk_pixel),.rst_n(rstn_pixel),.vsync_i(pipe_vs),.de_i(pipe_de),
+    .x_o(overlay_x),.y_o(overlay_y)
+);
+
+//---------------------------------------------------------------------
+// Application command UART, with no histogram/image diagnostic TX mux.
+//---------------------------------------------------------------------
+assign uart_tx_o = cmd_tx;
+
+// hsync 要比 de 早 IMG_LAT 个像素才与流水线后的数据同拍（= image_pipeline_top 的
+// LATENCY），否则 rgb2dvi 送出的 HS 与 DE 错位，HDMI 画面横移。
+// 深度用 IMG_LAT 参数化：改流水线延迟时只改上面那个 localparam，别只改一边。
+reg [IMG_LAT-1:0] r_hs_dly = {IMG_LAT{1'b0}};
 always @(posedge clk_pixel or negedge rstn_pixel) begin
-    if (!rstn_pixel) r_hs_dly <= 8'd0;
-    else             r_hs_dly <= {r_hs_dly[6:0], w_rgb_hsync};
+    if (!rstn_pixel) r_hs_dly <= {IMG_LAT{1'b0}};
+    else             r_hs_dly <= {r_hs_dly[IMG_LAT-2:0], w_rgb_hsync};
 end
-wire                                    pipe_hs  = r_hs_dly[7]     ;
+wire                                    pipe_hs  = r_hs_dly[IMG_LAT-1];
 
 wire                                    boundcrop_vs               ;
 wire                                    boundcrop_hs               ;
 wire                                    boundcrop_de               ;
 wire                   [  23:0]         boundcrop_data             ;
-FrameBoundCrop #(.SKIP_ROWS(2),.SKIP_COLS(2),.TOTAL_ROWS(720),.TOTAL_COLS(1280)) inst2_FrameCrop(
+FrameBoundCrop #(.SKIP_ROWS(3),.SKIP_COLS(2),.TOTAL_ROWS(720),.TOTAL_COLS(1280)) inst2_FrameCrop(
     .clk_i                             (clk_pixel                 ),
     .rst_i                             (~rstn_pixel               ),
 
     .vs_i                              (pipe_vs                   ),
     .hs_i                              (pipe_hs                   ),
     .de_i                              (pipe_de                   ),
-    .data_i                            (pipe_rgb                  ),
+    .data_i                            (pipe_rgb_detect       ),
 
     .vs_o                              (boundcrop_vs              ),
     .hs_o                              (boundcrop_hs              ),
@@ -1203,6 +1411,32 @@ FrameBoundCrop #(.SKIP_ROWS(2),.SKIP_COLS(2),.TOTAL_ROWS(720),.TOTAL_COLS(1280))
 
 	
 	
+// Single-axis PWM visual servo; P4-39 output. K2 toggles pause; non-live frames force pause.
+ parameter MOTOR_SPEED_MODE=0;
+ parameter MOTOR_DIR_INVERT=1;
+ // Transfer one coherent configuration snapshot into the motor domain.
+ wire [18:0] tracking_cfg;
+ wire tracking_cfg_valid;
+ axis_cdc #(.W(19)) u_tracking_cfg_cdc (
+ .clk_s(clk_pixel),.rst_s_n(rstn_pixel),
+ .data_s({app_play_mode,app_age_a,app_age_b,w_img_thr}),.valid_s(1'b1),
+ .clk_d(clk_sys),.rst_d_n(rstn_sys),.data_d(tracking_cfg),.valid_d(tracking_cfg_valid));
+ wire tracking_auto_pause,tracking_rearming;
+ tracking_config_guard u_tracking_config_guard (
+ .clk(clk_sys),.rst_n(rstn_sys),.config_i(tracking_cfg),.valid_i(tracking_cfg_valid),
+ .auto_pause_o(tracking_auto_pause),.rearming_o(tracking_rearming));
+ wire tracking_enabled;
+ tracking_pause_key u_tracking_pause_key (
+ .clk(clk_sys),.rst_n(rstn_sys),.key_n(key2_i),.auto_pause_i(tracking_auto_pause),.enabled_o(tracking_enabled));
+ wire [3:0] track_status;
+ wire [5:0] track_debug;
+ wire signed [9:0] track_error;
+ wire [20:0] track_pulse;
+ triangle_tracking_top #(.SPEED_MODE(MOTOR_SPEED_MODE),
+ .DIR_INVERT(MOTOR_DIR_INVERT)) u_triangle_follow(
+ .clk_pixel(clk_pixel),.rst_pixel_n(rstn_pixel),.vsync_i(shape_vs),
+ .objects_i(geometry_objects),.valid_i(geometry_valid),
+ .clk_sys(clk_sys),.rst_sys_n(rstn_sys),.enable_i(tracking_enabled && !tracking_rearming),
+ .pwm_o(can_tx_o),.status_o(track_status),
+ .error_o(track_error),.pulse_o(track_pulse),.debug_o(track_debug));
 endmodule
-
-
