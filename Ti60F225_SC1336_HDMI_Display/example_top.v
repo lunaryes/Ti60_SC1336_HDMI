@@ -248,7 +248,7 @@ module example_top
 	//	★ 2026-10-16：GPIOL_P_02 / GPIOL_N_02 原分给 lcd_de_o / lcd_pclk_o，但这两个
 	//	  LCD 端口在本设计里从未被驱动（lcd_pclk_o 的端口声明本身就是注释掉的），
 	//	  而显示走 HDMI，所以把这两个脚改分给按键（Ti60_Demo.peri.xml 同步改）。
-	input 		 	key1_i,				//	K1 = CSI = GPIOL_P_02 -> Canny 阈值 +4
+	input 		 	key1_i,				//	K1 = CSI = GPIOL_P_02 -> Canny 阈值循环 +4
 	output wire can_tx_o,
     input wire can_rx_i,
     input 		 	key2_i,				//	K2 = CSO = GPIOL_N_02 -> hold to pause tracking
@@ -1242,7 +1242,7 @@ uart_cmd #(
 //---------------------------------------------------------------------
 // Canny 阈值/平滑控制（K1 / K2 + 串口 'T'/'S'）—— 两个参数的唯一来源
 //   模块自带 2FF 同步 + 20 ms 消抖 + 按下沿事件，全在 clk_pixel 域，与流水线同域。
-//   K1 加4、K2 减4；阈值范围4..32，到边界饱和，双键不调节。
+//   K1 循环加4：4,8,...,32,4；K2 独立用于按住暂停跟踪。
 //   默认标准高斯，平滑仅通过串口 S 控制。UART T/S 优先于按键。
 //   按住不放不会连续步进；不按则参数保持不变。
 //---------------------------------------------------------------------
@@ -1257,7 +1257,7 @@ canny_threshold_key_ctrl #(
     .clk   (clk_pixel                  ),
     .rst_n (rstn_pixel                 ),
 
-    .key_data          ({1'b1, key1_i}),   // K1 threshold +4; K2 reserved for motor pause
+    .key_data          ({1'b1, key1_i}),   // K1 cyclic threshold +4; K2 reserved for motor pause
     .uart_thr_valid_i  (w_uart_thr_valid),   // 'T' 单拍脉冲（串口优先）
     .uart_thr_i        (w_uart_thr     ),    // 'T' 写入值，量程 0..255
     .uart_smooth_valid_i (r_smooth_valid),   // 'S' 单拍脉冲（串口优先）

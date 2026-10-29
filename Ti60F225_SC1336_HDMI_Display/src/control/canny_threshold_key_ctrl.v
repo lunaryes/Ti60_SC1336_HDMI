@@ -8,12 +8,12 @@
 // required.
 //
 // VF-Ti60F225 button assignment (1.8 V LVCMOS):
-//   key_data[0] = K1 = CSI = GPIOL_P_02 -> threshold +4
+//   key_data[0] = K1 = CSI = GPIOL_P_02 -> cyclic threshold +4
 //   key_data[1] = K2 = CSO = GPIOL_N_02 -> threshold -4
 // Both nets have 10 kOhm pull-ups and are connected to GND when pressed.
 // K3 is CRESET_N and must not be used for threshold adjustment.
 //
-// K1 raises threshold by 4; K2 lowers it by 4. Bounds saturate.
+// K1 cycles threshold by 4: ...28,32,4,8,...; K2 is unused by tracking top.
 // Both keys pressed together do not change the threshold. UART has priority.
 // Smoothing is controlled only by UART, default standard Gaussian.
 //
@@ -134,7 +134,7 @@ module canny_threshold_key_ctrl #(
     assign threshold_low_o = {1'b0, threshold_o[7:1]};
 
     //-----------------------------------------------------------------
-    // 3) Saturating threshold adjustment. Holding a key produces one event.
+    // 3) K1 cyclic increase; optional K2 saturating decrease. One event per press.
     // UART values are clamped to the same range as physical buttons.
     //-----------------------------------------------------------------
     always @(posedge clk or negedge rst_n) begin
@@ -146,7 +146,8 @@ module canny_threshold_key_ctrl #(
                            (uart_thr_i > THR_MAX) ? THR_MAX : uart_thr_i;
         else if (key_stable != 2'b00) begin
             case (key_press)
-                2'b01: threshold_o <= ({1'b0,threshold_o}+{1'b0,THR_STEP} >= {1'b0,THR_MAX})
+                2'b01: threshold_o <= (threshold_o >= THR_MAX) ? THR_MIN :
+                                     ({1'b0,threshold_o}+{1'b0,THR_STEP} >= {1'b0,THR_MAX})
                                       ? THR_MAX : threshold_o+THR_STEP;
                 2'b10: threshold_o <= ({1'b0,threshold_o} <= {1'b0,THR_MIN}+{1'b0,THR_STEP})
                                       ? THR_MIN : threshold_o-THR_STEP;
