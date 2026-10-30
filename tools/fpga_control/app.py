@@ -13,6 +13,7 @@ class SerialWorker(threading.Thread):
         self.jobs = queue.Queue()
         self.events = events
         self.port = None
+        self.motor_supported = False
     def emit(self, kind, value):
         self.events.put((kind,value))
     def log(self, value):
@@ -30,12 +31,15 @@ class SerialWorker(threading.Thread):
                     self.port = serial.Serial(arg,460800,timeout=.15,write_timeout=1)
                     self.port.reset_input_buffer()
                     result = snapshot(self.port,self.log)
+                    self.motor_supported=result['motor_supported']
                     self.emit('connected',result)
                 else:
                     if not self.port or not self.port.is_open:
                         raise RuntimeError('请先连接串口')
                     self.port.reset_input_buffer()
                     if kind == 'send':
+                        if any(f[0] in (0x55,0x43) for f in arg) and not self.motor_supported:
+                            raise RuntimeError('当前固件不支持串口电机控制，请先更新 FPGA 位流')
                         for frame in arg:
                             if len(frame)==1:
                                 reply=query(self.port,frame[0])
@@ -45,6 +49,7 @@ class SerialWorker(threading.Thread):
                                 self.log('TX '+frame.hex(' ').upper())
                         time.sleep(.15)
                     result=snapshot(self.port,self.log)
+                    self.motor_supported=result['motor_supported']
                     self.emit('status',(result,kind=='sync'))
             except Exception as exc:
                 if kind == 'connect':
@@ -65,6 +70,7 @@ class App:
         style.configure('TButton',padding=(10,5))
         self.events=queue.Queue();self.worker=SerialWorker(self.events);self.worker.start()
         self.connected=False;self.pending=False
+        self.motor_supported=False;self.motor_can_resume=False
         self.port=tk.StringVar(value='COM6')
         self.state=tk.StringVar(value='未连接')
         self.auto=tk.BooleanVar(value=False)
@@ -101,7 +107,15 @@ class App:
         for i,name in enumerate(MODES):
             ttk.Button(modes,text=name,command=lambda m=i:self.set_mode(m)).grid(row=i//3,column=i%3,sticky='ew',padx=2,pady=3)
         ttk.Label(frames,text='年龄 0 为最新完整帧；冻结后缓存不再更新。\n对比 / 差分按钮会同时切到全屏原图路径。\n返回实时后可重新应用左灰度＋黄色叠加布局。',wraplength=400).grid(row=5,column=0,columnspan=2,sticky='w',pady=10)
-        status=ttk.LabelFrame(body,text='板卡回读',padding=10);status.pack(fill='x')
+        motor=ttk.LabelFrame(self.actions,text='电机跟踪',padding=10)
+        motor.grid(row=1,column=0,columnspan=2,sticky='ew',pady=(10,0))
+        self.motor_text=tk.StringVar(value='连接后检查固件是否支持电机控制')
+        self.pause_motor=ttk.Button(motor,text='暂停跟踪',command=lambda:self.set_motor(False))
+        self.pause_motor.pack(side='left')
+        self.resume_motor=ttk.Button(motor,text='恢复跟踪',command=lambda:self.set_motor(True))
+        self.resume_motor.pack(side='left',padx=8)
+        ttk.Label(motor,textvariable=self.motor_text).pack(side='left',padx=8)
+        status=ttk.LabelFrame(body,text='板卡回读' ,padding=10);status.pack(fill='x')
         ttk.Label(status,textvariable=self.status,wraplength=940,justify='left').pack(anchor='w')
         controls=ttk.Frame(status);controls.pack(fill='x',pady=(8,0))
         ttk.Button(controls,text='读取并同步参数',command=lambda:self.submit('sync',None)).pack(side='left')
@@ -134,6 +148,8 @@ class App:
                     child.state(['!disabled'] if enabled else ['disabled'])
                 visit(child)
         visit(self.actions)
+        self.pause_motor.state(['!disabled'] if enabled and self.motor_supported else ['disabled'])
+        self.resume_motor.state(['!disabled'] if enabled and self.motor_can_resume else ['disabled'])
     def refresh_ports(self):
         from serial.tools import list_ports
         self.port_box['values']=[p.device for p in list_ports.comports()]
@@ -171,8 +187,24 @@ class App:
             if mode in (3,4):frames.append(command(0x4D,0))
             frames.append(command(0x50,mode));self.submit('send',frames)
         self.safe(send)
+    def set_motor(self,enabled):
+        if not self.motor_supported:
+            messagebox.showinfo('固件不支持','请先生成并烧录支持串口电机控制的新固件');return
+        self.safe(lambda:self.submit('send',[command(0x55,int(enabled))]))
     def send_hex(self):self.safe(lambda:self.submit('send',parse_hex(self.hex_value.get())))
     def show_status(self,s,sync=False):
+        self.motor_supported=s.get('motor_supported',False)
+        self.motor_can_resume=self.motor_supported and s['active_mode']==0 and not s.get('motor_blocked',True)
+        if not self.motor_supported:self.motor_text.set('固件不支持：需更新 FPGA 位流')
+        else:
+            if s['motor_blocked'] or s['active_mode']!=0:label='暂停（历史帧联锁）'
+            elif not s['motor_enabled']:label='已暂停'
+            elif s['motor_rearming']:label='重新确认目标'
+            elif not s['motor_status']&1:label='等待有效目标'
+            elif s['motor_status']&8:label='脉宽命令限位'
+            elif s['motor_status']&2:label='目标居中'
+            else:label='正在跟踪'
+            self.motor_text.set(label+'；K2 与串口共用状态')
         active=MODES[s['active_mode']] if s['active_mode']<len(MODES) else str(s['active_mode'])
         errors=s['errors']
         error_names=[name for bit,name in [(0,'采集不完整'),(1,'DDR 写错误'),(2,'DDR 读错误')] if errors&(1<<bit)]
@@ -186,7 +218,9 @@ class App:
             except queue.Empty:break
             if kind=='log':self.logbox.insert('end',time.strftime('%H:%M:%S')+'  '+arg+'\n');self.logbox.see('end')
             elif kind=='connected':self.connected=True;self.state.set('已连接 '+self.port.get());self.connect_button.configure(text='断开');self.show_status(arg,True)
-            elif kind=='closed':self.connected=False;self.state.set('未连接');self.connect_button.configure(text='连接')
+            elif kind=='closed':
+                self.connected=False;self.motor_supported=False;self.motor_can_resume=False
+                self.motor_text.set('未连接');self.state.set('未连接');self.connect_button.configure(text='连接')
             elif kind=='status':self.show_status(*arg)
             elif kind=='error':
                 self.logbox.insert('end','错误：'+arg+'\n');self.state.set('通信错误')

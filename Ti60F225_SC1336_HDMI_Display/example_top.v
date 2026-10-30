@@ -1207,6 +1207,8 @@ wire uart_cmd_rx=uart_rx_i;
 //   · 'S'<byte> 写平滑模式 0/1/2（>2 截断）；K1 循环 0→1→2→0；
 //   · 'R' 回读的第 1/6 字节分别是实际生效阈值/平滑模式（含按键修改）。
 //---------------------------------------------------------------------
+wire uart_motor_enable,uart_motor_valid;
+wire [6:0] uart_motor_read;
 uart_cmd #(
     .CLK_FREQ (74250000),        // clk_pixel
     .BAUD     (460800),
@@ -1231,6 +1233,7 @@ uart_cmd #(
     .gain_r_o (r_awb_gain              ),   // AWB R 增益（1/64 定点，复位 112 = ×1.75）
     .gain_b_o (b_awb_gain              ),   // AWB B 增益（复位 96 = ×1.50）
     .ocr_enable_o(ocr_overlay_enable   ),
+    .motor_enable_o(uart_motor_enable),.motor_valid_o(uart_motor_valid),.motor_read_i(uart_motor_read),
 
     .play_mode_o(app_play_mode),
     .age_a_o(app_age_a),.age_b_o(app_age_b),.replay_div_o(app_replay_div),
@@ -1425,11 +1428,19 @@ FrameBoundCrop #(.SKIP_ROWS(3),.SKIP_COLS(2),.TOTAL_ROWS(720),.TOTAL_COLS(1280))
  tracking_config_guard u_tracking_config_guard (
  .clk(clk_sys),.rst_n(rstn_sys),.config_i(tracking_cfg),.valid_i(tracking_cfg_valid),
  .auto_pause_o(tracking_auto_pause),.rearming_o(tracking_rearming));
+ wire serial_motor_enable,serial_motor_valid;
+ axis_cdc #(.W(1)) u_motor_command_cdc (
+ .clk_s(clk_pixel),.rst_s_n(rstn_pixel),.data_s(uart_motor_enable),.valid_s(uart_motor_valid),
+ .clk_d(clk_sys),.rst_d_n(rstn_sys),.data_d(serial_motor_enable),.valid_d(serial_motor_valid));
  wire tracking_enabled;
  tracking_pause_key u_tracking_pause_key (
- .clk(clk_sys),.rst_n(rstn_sys),.key_n(key2_i),.auto_pause_i(tracking_auto_pause),.enabled_o(tracking_enabled));
+ .clk(clk_sys),.rst_n(rstn_sys),.key_n(key2_i),.auto_pause_i(tracking_auto_pause),.serial_valid_i(serial_motor_valid),.serial_enable_i(serial_motor_enable),.enabled_o(tracking_enabled));
  wire [3:0] track_status;
  wire [5:0] track_debug;
+ axis_cdc #(.W(7)) u_motor_status_cdc (
+ .clk_s(clk_sys),.rst_s_n(rstn_sys),
+ .data_s({tracking_auto_pause,tracking_rearming,tracking_enabled,track_status}),.valid_s(1'b1),
+ .clk_d(clk_pixel),.rst_d_n(rstn_pixel),.data_d(uart_motor_read),.valid_d());
  wire signed [9:0] track_error;
  wire [20:0] track_pulse;
  triangle_tracking_top #(.SPEED_MODE(MOTOR_SPEED_MODE),
