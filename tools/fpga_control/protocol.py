@@ -1,8 +1,8 @@
 """Current Ti60 binary UART protocol; no device access on import."""
 import time
 SETTINGS = {0x54:32, 0x56:3, 0x4D:3, 0x45:1, 0x41:255, 0x42:255,
-            0x53:2, 0x50:4, 0x4A:15, 0x4B:15, 0x4F:255, 0x46:1}
-QUERIES = {0x51, 0x52, 0x44}
+            0x53:2, 0x50:4, 0x4A:15, 0x4B:15, 0x4F:255, 0x46:1, 0x55:1}
+QUERIES = {0x51, 0x52, 0x44, 0x43}
 MODES = ['实时', '冻结', '回放', '两帧对比', '两帧差分']
 LAYOUTS = ['原图', '算法视图', '左灰度 / 右边缘', '左灰度 / 右原图＋黄色边缘']
 VIEWS = ['边缘', '灰度']
@@ -47,6 +47,8 @@ def validate_reply(code, data):
         raise ValueError('DDR 状态回复无效')
     if code == 0x52 and (data[1] > 3 or data[2] > 3 or data[5] > 2):
         raise ValueError('图像配置回复无效')
+    if code == 0x43 and (data[:3] != bytes([0x43,0x54,1]) or data[3] > 7 or data[4] > 15):
+        raise ValueError('电机状态回复无效')
     return data
 
 def query(port, code):
@@ -67,7 +69,15 @@ def snapshot(port, log=lambda text: None):
         packets[code] = reply
     q,r,d = packets[0x51],packets[0x52],packets[0x44]
     status = int.from_bytes(d[3:7], 'little')
-    return dict(requested_mode=q[1], age=q[3], reference=q[4], divider=q[5],
+    result = dict(requested_mode=q[1], age=q[3], reference=q[4], divider=q[5],
                 active_mode=(status>>16)&7, retained=(status>>19)&31,
                 source=status&65535, errors=status>>24, threshold=r[0],
                 view=r[1], layout=r[2], gain_r=r[3], gain_b=r[4], smooth=r[5])
+
+    result['motor_supported'] = q[6] == 0xA1
+    if result['motor_supported']:
+        c = query(port, 0x43)
+        log(f'TX 43  RX {c.hex(" ").upper()}')
+        result.update(motor_enabled=bool(c[3]&1),motor_rearming=bool(c[3]&2),
+                      motor_blocked=bool(c[3]&4),motor_status=c[4])
+    return result

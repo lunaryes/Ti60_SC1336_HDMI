@@ -118,6 +118,9 @@ module uart_cmd #(
     input wire status_valid_i,
     input wire [31:0] app_status_i,
     output reg        hist_req_o,   // 收到 'H' 的单拍脉冲
+    output reg        motor_enable_o,
+    output reg        motor_valid_o,
+    input wire [6:0] motor_read_i, // {interlock,rearming,enabled,status[3:0]}
     output wire       tx_busy_o     // TX 状态机忙（含已排队的 tx_req）
 );
 
@@ -203,7 +206,7 @@ module uart_cmd #(
     //-----------------------------------------------------------------
     localparam [7:0] C_T = 8'h54, C_V = 8'h56, C_M = 8'h4D, C_R = 8'h52,
                      C_A = 8'h41, C_B = 8'h42, C_H = 8'h48, C_S = 8'h53,
-                     C_Q=8'h51, C_P=8'h50, C_N=8'h4e, C_J=8'h4a, C_K=8'h4b, C_O=8'h4f, C_F=8'h46, C_D=8'h44, C_E=8'h45;
+                     C_Q=8'h51, C_P=8'h50, C_N=8'h4e, C_J=8'h4a, C_K=8'h4b, C_O=8'h4f, C_F=8'h46, C_D=8'h44, C_E=8'h45, C_U=8'h55, C_C=8'h43;
 
     reg       p_wait;                 // 正在等参数字节
     reg [7:0] p_cmd;
@@ -221,6 +224,7 @@ module uart_cmd #(
             gain_r_o <= GAIN_R_DEF;
             gain_b_o <= GAIN_B_DEF;
             ocr_enable_o <= 1'b1;
+            motor_enable_o<=1;motor_valid_o<=0;
             p_wait     <= 1'b0;
             p_cmd      <= 8'd0;
             tx_req     <= 1'b0;
@@ -229,6 +233,7 @@ module uart_cmd #(
         end else begin
             tx_req      <= 1'b0;
             hist_req_o  <= 1'b0;
+            motor_valid_o<=0;
             status_req_o<=0;
             if(status_valid_i) begin
                 tx_d[0]<=8'h44;tx_d[1]<=8'h56;tx_d[2]<=1;
@@ -240,7 +245,7 @@ module uart_cmd #(
             if (rx_valid) begin
                 if (!p_wait) begin
                     case (rx_byte)
-                        C_T, C_V, C_M, C_A, C_B, C_S, C_P, C_N, C_J, C_K, C_O, C_F, C_E,8'h59,8'h5a: begin
+                        C_T, C_V, C_M, C_A, C_B, C_S, C_P, C_N, C_J, C_K, C_O, C_F, C_E, C_U,8'h59,8'h5a: begin
                             p_cmd  <= rx_byte;
                             p_wait <= 1'b1;
                         end
@@ -252,7 +257,14 @@ module uart_cmd #(
                         C_Q: begin
                             tx_d[0]<=8'h56;tx_d[1]<={5'd0,play_mode_o};tx_d[2]<=0; // Reserved: temporal IIR removed
                             tx_d[3]<={4'd0,age_a_o};tx_d[4]<={4'd0,age_b_o};
-                            tx_d[5]<=replay_div_o;tx_d[6]<=0;tx_d[7]<=8'h0a;tx_req<=1;
+                            tx_d[5]<=replay_div_o;tx_d[6]<=8'ha1; // motor protocol capability
+                            tx_d[7]<=8'h0a;tx_req<=1;
+                        end
+                        C_C: begin
+                            tx_d[0]<=8'h43;tx_d[1]<=8'h54;tx_d[2]<=1;
+                            tx_d[3]<={5'd0,motor_read_i[6:4]};
+                            tx_d[4]<={4'd0,motor_read_i[3:0]};
+                            tx_d[5]<=0;tx_d[6]<=0;tx_d[7]<=8'h0a;tx_req<=1;
                         end
                         C_R: begin
                             tx_d[0] <= thr_read_i;       // 实际生效值（含按键）
@@ -269,6 +281,9 @@ module uart_cmd #(
                     endcase
                 end else begin
                     case (p_cmd)
+                        C_U: if(rx_byte<=1) begin
+                            motor_enable_o<=rx_byte[0];motor_valid_o<=1;
+                        end
                         C_P: play_mode_o<=(rx_byte>4)?0:rx_byte[2:0];
                         C_N: ; // Legacy N parameter consumed, no effect
                         C_J: age_a_o<=rx_byte[3:0];
