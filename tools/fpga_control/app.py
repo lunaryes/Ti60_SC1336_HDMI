@@ -63,7 +63,7 @@ class App:
     def __init__(self, root):
         self.root=root
         root.title('Ti60 图像处理控制台')
-        root.geometry('1030x820');root.minsize(900,720)
+        root.geometry('1030x900');root.minsize(900,720)
         style=ttk.Style(root)
         if 'vista' in style.theme_names(): style.theme_use('vista')
         style.configure('Title.TLabel',font=('Microsoft YaHei UI',17,'bold'))
@@ -129,7 +129,7 @@ class App:
         ttk.Label(logbar,text='通信记录').pack(side='left')
         ttk.Button(logbar,text='保存记录',command=self.save_log).pack(side='right')
         ttk.Button(logbar,text='清空',command=lambda:self.logbox.delete('1.0','end')).pack(side='right',padx=6)
-        self.logbox=ScrolledText(body,height=11,font=('Consolas',10));self.logbox.pack(fill='both',expand=True,pady=(5,0))
+        self.logbox=ScrolledText(body,height=7,font=('Consolas',10));self.logbox.pack(fill='both',expand=True,pady=(5,0))
         self.refresh_ports();self.enable_actions(False)
         root.protocol('WM_DELETE_WINDOW',self.quit)
         root.after(70,self.drain);root.after(1000,self.poll)
